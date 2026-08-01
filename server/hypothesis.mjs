@@ -8,26 +8,67 @@ export const CONFIRM = {
   confidence: 0.7,      // confidence ≥ 0.7
   verifications: 2,     // 검증 이벤트 2회 이상 통과
   layers: ['language', 'reaction', 'behavior'],   // 3겹 신호 모두 존재
+
+  // ── 아래 둘은 목표가 바뀌면서 새로 생긴 조건이다 ──────────
+  //
+  // 10일 시뮬레이션에서 confirmed된 건 '고양이에게 밥 주기'였다. 혼자 하는 일이다.
+  // 골 맵은 거기 맞춰 "의자는 벽을 보게 놓여 마주 앉는 구도가 안 만들어진다"로 지어졌다.
+  // **문턱을 없애랬더니 사람을 없앤 것이다.**
+  //
+  // 이 게임의 목표는 취향을 알아내는 게 아니라 이 사람이 누군가에게 자기 얘기를 하는 것이다.
+  // 그러니 상대가 없는 가설은 아무리 확실해도 답이 아니다.
+
+  needsWho: true,       // 가설이 **상대를 지목**해야 한다
+  needsOpening: 1,      // 그 상대에게 **실제로 자기 얘기를 한 적**이 있어야 한다
 };
 
-/** @returns {'dropped'|'confirmed'|'testing'|'forming'} */
-export function statusOf(h) {
+/**
+ * @param {object} h 가설
+ * @param {number} [openedTo] 이 가설이 지목한 상대에게 자기 얘기를 한 횟수 (listening.js)
+ * @returns {'dropped'|'confirmed'|'testing'|'forming'}
+ */
+export function statusOf(h, openedTo = 0) {
   if (h.dropped) return 'dropped';
 
   const kinds = new Set((h.signals ?? []).map((s) => s.kind));
   const layered = CONFIRM.layers.every((k) => kinds.has(k));
   const confident = (h.confidence ?? 0) >= CONFIRM.confidence;
   const verified = (h.verified_count ?? 0) >= CONFIRM.verifications;
+  // 상대가 없으면 "혼자 하는 일"이다. 이 게임의 답이 될 수 없다
+  const hasWho = !CONFIRM.needsWho || Boolean(h.who && h.who !== 'none');
+  const opened = openedTo >= CONFIRM.needsOpening;
 
-  if (confident && verified && layered) return 'confirmed';
+  if (confident && verified && layered && hasWho && opened) return 'confirmed';
   // 하나라도 만족하기 시작하면 검증 단계 — Act 2 진입 조건 (DESIGN.md §3)
   if (confident || verified || kinds.size >= 2) return 'testing';
   return 'forming';
 }
 
-/** 분석 결과에 status를 붙이고, 골 맵을 열 수 있는지 판정한다. */
-export function applyStatus(analysis) {
-  const hypotheses = (analysis?.hypotheses ?? []).map((h) => ({ ...h, status: statusOf(h) }));
+/**
+ * 상대별 자기 개방 횟수를 센다. **여기가 이 게임의 최종 지표다.**
+ * @param {Array<{to?: string, self?: boolean}>} told
+ */
+export function openedBy(told = []) {
+  const m = new Map();
+  for (const t of told) {
+    if (!t?.self || !t.to) continue;
+    m.set(t.to, (m.get(t.to) ?? 0) + 1);
+  }
+  return m;
+}
+
+/**
+ * 분석 결과에 status를 붙이고, 골 맵을 열 수 있는지 판정한다.
+ * @param {object} analysis
+ * @param {Array} [told] 여태 직접 친 문장들 (observer.told). 자기 개방 판정에 쓴다
+ */
+export function applyStatus(analysis, told = []) {
+  const opened = openedBy(told);
+  const hypotheses = (analysis?.hypotheses ?? []).map((h) => ({
+    ...h,
+    status: statusOf(h, opened.get(h.who) ?? 0),
+    opened_to_who: opened.get(h.who) ?? 0,
+  }));
   const confirmed = hypotheses.find((h) => h.status === 'confirmed') ?? null;
   const testing = hypotheses.filter((h) => h.status === 'testing');
 
@@ -136,6 +177,12 @@ function mergeSignals(oldSignals, newSignals) {
 export function missing(h) {
   const kinds = new Set((h.signals ?? []).map((s) => s.kind));
   const out = [];
+  if (CONFIRM.needsWho && !(h.who && h.who !== 'none')) {
+    out.push('상대가 없다 — 혼자 하는 일은 답이 아니다');
+  }
+  if ((h.opened_to_who ?? 0) < CONFIRM.needsOpening) {
+    out.push(`${h.who && h.who !== 'none' ? h.who : '상대'}에게 자기 얘기 ${h.opened_to_who ?? 0}/${CONFIRM.needsOpening}회`);
+  }
   if ((h.confidence ?? 0) < CONFIRM.confidence) {
     out.push(`confidence ${(h.confidence ?? 0).toFixed(2)} < ${CONFIRM.confidence}`);
   }

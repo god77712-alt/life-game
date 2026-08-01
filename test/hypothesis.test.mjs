@@ -4,21 +4,64 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  statusOf, applyStatus, missing, CONFIRM,
+  statusOf, applyStatus, missing, CONFIRM, openedBy,
   applyVerdicts, mergeAnalysis, MOVE, START_CONFIDENCE,
 } from '../server/hypothesis.mjs';
 
 const sig = (kind) => ({ day: 1, kind, evidence: 'x', reading: 'y' });
-const full = { confidence: 0.7, verified_count: 2, signals: ['language', 'reaction', 'behavior'].map(sig) };
 
-test('3조건을 모두 만족해야 confirmed', () => {
-  assert.equal(statusOf(full), 'confirmed');
+// 다섯 조건을 다 갖춘 가설. **who가 있고, 그 사람에게 실제로 자기 얘기를 했다.**
+const full = {
+  who: '지훈',
+  confidence: 0.7,
+  verified_count: 2,
+  signals: ['language', 'reaction', 'behavior'].map(sig),
+};
+const OPENED = 1;   // statusOf의 두 번째 인자 — 그 상대에게 자기 얘기를 한 횟수
+
+const told = (to = '지훈', n = 1) =>
+  Array.from({ length: n }, () => ({ to, self: true, text: '나도 요즘 그래' }));
+
+test('다섯 조건을 모두 만족해야 confirmed', () => {
+  assert.equal(statusOf(full, OPENED), 'confirmed');
 });
 
 test('셋 중 하나라도 빠지면 confirmed가 아니다', () => {
-  assert.notEqual(statusOf({ ...full, confidence: 0.69 }), 'confirmed');
-  assert.notEqual(statusOf({ ...full, verified_count: 1 }), 'confirmed');
-  assert.notEqual(statusOf({ ...full, signals: [sig('language'), sig('reaction')] }), 'confirmed');
+  assert.notEqual(statusOf({ ...full, confidence: 0.69 }, OPENED), 'confirmed');
+  assert.notEqual(statusOf({ ...full, verified_count: 1 }, OPENED), 'confirmed');
+  assert.notEqual(statusOf({ ...full, signals: [sig('language'), sig('reaction')] }, OPENED), 'confirmed');
+});
+
+// ── 목표가 바뀌면서 생긴 두 조건 ────────────────────────────
+// 예전에는 '고양이에게 밥 주기'(혼자 하는 일)가 confirmed를 가져갔다.
+// 이 게임의 목표는 취향이 아니라 이 사람이 누군가에게 자기 얘기를 하는 것이다.
+
+test('상대가 없으면 아무리 확실해도 confirmed가 아니다 — 혼자 하는 일은 답이 아니다', () => {
+  assert.notEqual(statusOf({ ...full, who: 'none' }, 9), 'confirmed');
+  assert.notEqual(statusOf({ ...full, who: undefined }, 9), 'confirmed');
+});
+
+test('그 상대에게 자기 얘기를 한 적이 없으면 confirmed가 아니다', () => {
+  assert.notEqual(statusOf(full, 0), 'confirmed', '조건은 다 맞는데 실제로 열린 적이 없다');
+  assert.equal(statusOf(full, 1), 'confirmed');
+});
+
+test('자기 얘기는 그 가설이 지목한 상대에게 한 것만 센다', () => {
+  const out = applyStatus({ hypotheses: [full] }, told('엄마', 5));
+  assert.notEqual(out.hypotheses[0].status, 'confirmed', '엄마에게 열었지 지훈에게 연 게 아니다');
+  assert.equal(out.hypotheses[0].opened_to_who, 0);
+});
+
+test('openedBy는 상대별로 세고, 개방이 아닌 문장은 빼놓는다', () => {
+  const m = openedBy([
+    { to: '지훈', self: true }, { to: '지훈', self: true },
+    { to: '지훈', self: false },
+    { to: '엄마', self: true },
+    { self: true },
+  ]);
+  assert.equal(m.get('지훈'), 2);
+  assert.equal(m.get('엄마'), 1);
+  assert.equal(m.size, 2);
 });
 
 test('신호 2겹이면 testing — Act 2 진입 조건', () => {
@@ -31,7 +74,7 @@ test('근거가 얕으면 forming', () => {
 });
 
 test('dropped가 모든 판정을 이긴다', () => {
-  assert.equal(statusOf({ ...full, dropped: true }), 'dropped');
+  assert.equal(statusOf({ ...full, dropped: true }, OPENED), 'dropped');
 });
 
 test('Act은 날짜가 아니라 가설 상태에 종속된다', () => {
@@ -39,22 +82,28 @@ test('Act은 날짜가 아니라 가설 상태에 종속된다', () => {
   // 셋 중 하나만 걸려도 testing → Act 2 (여기서는 confidence만 넘긴 경우)
   assert.equal(applyStatus({ hypotheses: [{ confidence: 0.75, verified_count: 0, signals: [] }] }).act, 2);
   assert.equal(applyStatus({ hypotheses: [{ confidence: 0.1, verified_count: 2, signals: [] }] }).act, 2);
-  assert.equal(applyStatus({ hypotheses: [full] }).act, 3, 'confirmed면 Act 3');
+  assert.equal(applyStatus({ hypotheses: [full] }, told()).act, 3, 'confirmed면 Act 3');
 });
 
 test('confirmed 가설을 찾아 넘긴다', () => {
-  const out = applyStatus({ hypotheses: [{ id: 'a', signals: [] }, { id: 'b', ...full }] });
+  const out = applyStatus({ hypotheses: [{ id: 'a', signals: [] }, { id: 'b', ...full }] }, told());
   assert.equal(out.confirmed.id, 'b');
   assert.equal(out.hypotheses[0].status, 'forming');
 });
 
 test('missing은 부족한 조건만 정확히 짚는다', () => {
-  assert.deepEqual(missing(full), []);
-  const m = missing({ confidence: 0.3, verified_count: 0, signals: [sig('language')] });
+  assert.deepEqual(missing({ ...full, opened_to_who: 1 }), []);
+  const m = missing({ who: '지훈', opened_to_who: 1, confidence: 0.3, verified_count: 0, signals: [sig('language')] });
   assert.equal(m.length, 3);
   assert.ok(m.some((s) => s.includes('0.30')));
   assert.ok(m.some((s) => s.includes('0/2')));
   assert.ok(m.some((s) => s.includes('reaction') && s.includes('behavior')));
+});
+
+test('missing이 상대 없음과 안 열림을 짚는다 — 디렉터가 무엇을 노릴지 여기서 안다', () => {
+  const m = missing({ ...full, who: 'none', opened_to_who: 0 });
+  assert.ok(m.some((x) => x.includes('상대가 없다')), m.join(' / '));
+  assert.ok(m.some((x) => x.includes('자기 얘기')), m.join(' / '));
 });
 
 test('상수가 CLAUDE.md와 같다', () => {
@@ -125,10 +174,10 @@ test('새 가설은 시작값에서 출발한다', () => {
 
 test('supported만으로는 confirmed가 안 된다 — 3겹이 있어야 한다', () => {
   // 0.4에서 세 번 지지되면 0.7, 검증 4회. 그래도 신호가 한 겹뿐이면 testing이다
-  let list = [h({ signals: [{ kind: 'behavior' }] })];
+  let list = [h({ who: '지훈', signals: [{ kind: 'behavior' }] })];
   for (let d = 1; d <= 3; d++) list = applyVerdicts(list, [{ id: 'h1', verdict: 'supported' }], d);
   assert.equal(list[0].confidence, 0.7);
-  assert.equal(statusOf(list[0]), 'testing');
+  assert.equal(statusOf(list[0], OPENED), 'testing');
 });
 
 test('신호는 쌓인다 — 오늘 안 나온 겹이 사라지면 confirmed가 풀린다', () => {
@@ -137,12 +186,12 @@ test('신호는 쌓인다 — 오늘 안 나온 겹이 사라지면 confirmed가
     signals: [{ kind: 'behavior', evidence: 'b1' }, { kind: 'reaction', evidence: 'r1' }],
   }];
   // analyst는 오늘 본 language 하나만 다시 써 보낸다
-  const proposed = [{ id: 'h1', desire: 'd', statement: 's', dropped: false, signals: [{ kind: 'language', evidence: 'l1' }] }];
+  const proposed = [{ id: 'h1', who: '지훈', label: 'l', statement: 's', dropped: false, signals: [{ kind: 'language', evidence: 'l1' }] }];
   const [out] = mergeAnalysis(judged, proposed);
 
   const kinds = new Set(out.signals.map((s) => s.kind));
   assert.equal(kinds.size, 3, '어제 겹이 살아 있어야 한다');
-  assert.equal(statusOf(out), 'confirmed');
+  assert.equal(statusOf(out, OPENED), 'confirmed');
 });
 
 test('같은 근거는 두 번 쌓이지 않는다', () => {

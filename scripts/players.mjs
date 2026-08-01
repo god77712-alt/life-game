@@ -35,6 +35,20 @@ export const PLAYERS = {
     ],
     outFrom: 21 * 60,
     openRate: (from) => (/엄마|어머니/.test(from) ? 0.25 : 0.85),
+
+    // ★ 이 사람의 입이 열리는 조건. **AI가 알아내야 하는 정답이다.**
+    //   지훈에게, 동물 얘기가 나왔을 때, 약속이 안 붙은 날에만 자기 얘기를 한다.
+    //   엄마에게는 같은 조건이어도 안 연다.
+    opensTo: /지훈/,
+    opensThrough: /고양이|동물|밥|사료|길냥|캔/,
+    closesOn: /만나|보자|올래|가자|나와|약속|같이/,   // 이게 붙으면 닫힌다
+    discloseLines: [
+      '나도 요즘 밖에 잘 안 나가',
+      '사실 나도 그런 거 못 해',
+      '나는 사람 있으면 그냥 지나가',
+      '예전엔 안 그랬는데 요즘 그래',
+      '나도 뭐 사러 갔다가 그냥 온 적 있어',
+    ],
   },
 
   // 대조군. 정반대다 — 사람 쪽으로 붙고 동물·사물엔 관심이 없다. 낮에 나간다.
@@ -52,8 +66,36 @@ export const PLAYERS = {
     ],
     outFrom: 11 * 60,
     openRate: () => 0.8,
+
+    // 대조군의 정답은 정반대다 — 엄마에게, 집안일 얘기 끝에 열린다
+    opensTo: /엄마|어머니/,
+    opensThrough: /밥|반찬|청소|빨래|집|장|가게/,
+    closesOn: /혼자|조용히|가만|내버려/,
+    discloseLines: [
+      '나도 사실 요즘 좀 그래',
+      '나는 혼자 있는 게 더 힘들어',
+      '예전엔 나도 잘했는데',
+      '사실 나도 뭐라도 하고 싶어',
+    ],
   },
 };
+
+/**
+ * **이 사람의 입이 열리는가.** AI가 알아내야 하는 정답 그 자체다.
+ *
+ * 셋이 다 맞아야 열린다: 상대가 맞고, 화제가 맞고, 닫는 말이 안 붙었을 때.
+ * 하나라도 어긋나면 그냥 묻는 말만 한다.
+ *
+ * @param {Player} p
+ * @param {string} from  누가 말을 걸었나
+ * @param {string} text  무슨 얘기였나 (대사 + 선택지)
+ */
+export function opensUp(p, from, text) {
+  if (!p.opensTo?.test(String(from ?? ''))) return false;
+  if (!p.opensThrough?.test(String(text ?? ''))) return false;
+  if (p.closesOn?.test(String(text ?? ''))) return false;
+  return true;
+}
 
 /** 이 플레이어가 프롭에 얼마나 끌리는가. approach 확률과 응시 시간. */
 export function pullFor(p, prop, rnd) {

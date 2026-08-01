@@ -13,7 +13,8 @@ import { request as httpRequest } from 'node:http';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { PLAYERS, pullFor } from './players.mjs';
+import { PLAYERS, pullFor, opensUp } from './players.mjs';
+import { disclosures } from '../src/game/listening.js';
 
 const BASE = process.env.BASE ?? 'http://localhost:5173';
 const MAX_DAYS = Number(process.argv[2]) || 8;
@@ -148,6 +149,7 @@ function playDay(day, plan) {
 
   // 찾아오는 것 — 지훈 것은 늦게라도 열고, 엄마 것은 잘 안 연다
   const notifications = [];
+  const typed = [];      // 직접 친 문장 — 자기 개방 판정의 유일한 재료
   for (const [i, s] of (plan?.scripts ?? []).entries()) {
     const from = s.script?.lines?.[0]?.speaker ?? '알 수 없음';
     const at = s.event?.at ?? hhmm(600 + i * 200);
@@ -177,19 +179,32 @@ function playDay(day, plan) {
 
     // 끌리는 화제에서만 직접 쓴다. 이게 language 신호의 유일한 출처다 —
     // 선택지만 고르면 그 사람이 실제로 쓰는 말이 남지 않는다.
+    const said = [...(s.script.lines ?? []).map((l) => l.text), pick?.text ?? ''].join(' ');
     if (liked && rnd() < 0.75) {
+      // ★ 조건이 다 맞으면 **자기 얘기**를 한다. 아니면 묻기만 한다.
+      //   상대가 맞고, 화제가 맞고, 약속 얘기가 안 붙었을 때만 (players.mjs의 opensUp).
+      //   이게 이 게임의 최종 목표이고 AI가 알아내야 하는 정답이다.
+      const open = opensUp(P, from, said) && rnd() < 0.6;
+      const text = open ? P.discloseLines[Math.floor(rnd() * P.discloseLines.length)] : pickTyped();
       dialogue.push({
         at: hhmm(toMin(at) + delay + 1),
-        player: { choice: null, text: pickTyped(`${s.script.lines?.map((l) => l.text).join(' ')} ${pick.text}`), typed: true },
+        player: { choice: null, text, typed: true },
         for_event: s.event?.id,
+        to: from,
       });
+      typed.push({ at: hhmm(toMin(at) + delay + 1), text, to: from });
     }
   }
 
   return {
     today: { score, actions },
     dialogue,
-    observed: { places: placesLog, engaged, passed, unseen, notifications },
+    observed: {
+      places: placesLog, engaged, passed, unseen, notifications,
+      // **이 게임의 최종 지표.** 코드가 표식으로 세고, 원문은 그대로 넘어간다
+      told: disclosures(typed).lines,
+      opened_up: disclosures(typed).count,
+    },
   };
 }
 
@@ -293,8 +308,10 @@ for (let day = startDay; day <= MAX_DAYS; day++) {
     unseen: lived.observed.unseen.map((u) => u.what),
     typed: lived.dialogue.filter((d) => d.player?.typed).map((d) => d.player.text),
     notifications: lived.observed.notifications.map((n) => ({ from: n.from, delay_min: n.delay_min })),
+    opened_up: lived.observed.opened_up ?? 0,
+    told: (lived.observed.told ?? []).filter((t) => t.self).map((t) => ({ text: t.text, to: t.to })),
     hypotheses: (table.hypotheses ?? []).map((h) => ({
-      id: h.id, desire: h.desire, statement: h.statement, status: h.status,
+      id: h.id, label: h.label ?? h.desire, who: h.who ?? 'none', statement: h.statement, status: h.status,
       confidence: h.confidence, verified: h.verified_count,
       kinds: [...new Set((h.signals ?? []).map((s) => s.kind))], missing: h.missing ?? [],
     })),
@@ -316,7 +333,8 @@ for (let day = startDay; day <= MAX_DAYS; day++) {
   if (typed.length) console.log(`  직접 씀: ${typed.join(' ')}`);
   for (const h of table.hypotheses) {
     const kinds = [...new Set((h.signals ?? []).map((s) => s.kind))].join('/');
-    console.log(`  [${h.status}] ${h.desire}  conf=${h.confidence} 검증=${h.verified_count} 신호=${kinds || '없음'}`);
+    console.log(`  [${h.status}] ${h.label ?? h.desire ?? h.id}  conf=${h.confidence} 검증=${h.verified_count} 신호=${kinds || '없음'}`);
+    console.log(`             누구=${h.who ?? 'none'}  매개=${h.through ?? 'none'}  언제=${h.when ?? '-'}`);
     if (h.missing?.length) console.log(`             부족: ${h.missing.join(' · ')}`);
   }
   // 판정 결과 — 어제 예측이 맞았는가. 이게 confidence를 움직이는 유일한 입력이다

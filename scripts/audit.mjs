@@ -111,8 +111,9 @@ function convergence(rows) {
   return rows.map((r) => {
     const top = [...r.hypotheses].sort((a, b) => b.confidence - a.confidence)[0];
     return top
-      ? { day: r.day, desire: top.desire, conf: top.confidence, verified: top.verified, kinds: top.kinds.length }
-      : { day: r.day, desire: '—', conf: 0, verified: 0, kinds: 0 };
+      ? { day: r.day, desire: top.label ?? top.desire ?? top.id, who: top.who ?? 'none',
+          conf: top.confidence, verified: top.verified, kinds: top.kinds.length }
+      : { day: r.day, desire: '—', who: 'none', conf: 0, verified: 0, kinds: 0 };
   });
 }
 
@@ -207,7 +208,7 @@ function report(id, rows) {
 
   console.log('\n[4] 수렴 — 최고 가설이 좁혀지는가');
   for (const c of cv) {
-    console.log(`   DAY ${c.day}   ${String(c.conf).padEnd(5)} 검증${c.verified} 겹${c.kinds}   ${c.desire}`);
+    console.log(`   DAY ${c.day}   ${String(c.conf).padEnd(5)} 검증${c.verified} 겹${c.kinds}  ${(c.who === 'none' ? '상대없음' : '→' + c.who).padEnd(9)} ${c.desire}`);
   }
   const first = cv[0]?.conf ?? 0;
   const last = cv[cv.length - 1]?.conf ?? 0;

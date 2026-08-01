@@ -56,12 +56,22 @@ const SIGNAL = obj({
   reading: str(),           // 그것을 어떻게 읽었는가
 });
 
-// 분석 — 가설 테이블. status는 코드가 정한다(hypothesis.mjs). 모델은 근거만 낸다.
+/**
+ * 분석 — 가설 테이블. status는 코드가 정한다(hypothesis.mjs). 모델은 근거만 낸다.
+ *
+ * **가설의 형태가 바뀌었다.** 예전에는 (무엇에 끌리는가) 하나였고,
+ * 그래서 '고양이에게 밥 주기' 같은 혼자 하는 일이 confirmed를 가져갔다.
+ * 이 게임의 목표는 취향을 알아내는 게 아니라 **이 사람이 누군가에게 자기 얘기를 하는 것**이다.
+ * 그러니 가설은 취향이 아니라 **입이 열리는 조건**이어야 한다 — 누구에게, 무엇을 매개로, 언제.
+ */
 const ANALYSIS_SCHEMA = obj({
   hypotheses: arr(obj({
     id: str(),
-    desire: str(),              // 한 단어에 가까운 이름 (요리, 그림, 운동…)
-    statement: str(),           // "무엇에 끌리는가"를 한 문장으로
+    label: str(),               // 짧은 이름. '지훈 · 고양이 화제 · 약속 없을 때'
+    who: str(),                 // ★ 누구에게 열리는가. cast의 이름, 아직 모르면 'none'
+    through: str(),             // 무엇을 매개로 (화제·사물·동물). 없으면 'none'
+    when: str(),                // 어떤 상황·시간에
+    statement: str(),           // 위 셋을 합친 **검증 가능한** 한 문장
     // confidence·verified_count는 여기 없다 — referee 판정에 따라 코드가 움직인다
     signals: arr(SIGNAL),
     dropped: { type: 'boolean' },

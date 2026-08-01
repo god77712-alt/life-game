@@ -223,8 +223,9 @@ async function runSettle(body) {
       predictions,
       observed,
       dialogue,
-      // statement만 준다. confidence를 보여주면 마저 올려주고 싶어진다
-      hypotheses: live.map((h) => ({ id: h.id, statement: h.statement })),
+      // statement와 who만 준다. confidence를 보여주면 마저 올려주고 싶어진다.
+      // who가 있어야 "예측한 그 사람에게 열렸는가"를 판정할 수 있다
+      hypotheses: live.map((h) => ({ id: h.id, who: h.who, statement: h.statement })),
     }).catch((err) => {
       // 채점이 실패해도 하루를 버리지 않는다. 점수가 그대로일 뿐이다
       console.warn(`[settle] day${day} 채점 실패 — 점수 유지: ${err.message}`);
@@ -251,7 +252,11 @@ async function runSettle(body) {
     }
 
     // 점수는 analyst가 뭐라 하든 채점 결과를 쓴다. 문턱 판정도 코드가 한다
-    analysis = applyStatus({ ...a.data, hypotheses: mergeAnalysis(judged, a.data.hypotheses) });
+    // told(직접 친 문장)를 넘긴다 — 자기 개방이 실제로 있었는지가 confirmed의 조건이다
+    analysis = applyStatus(
+      { ...a.data, hypotheses: mergeAnalysis(judged, a.data.hypotheses) },
+      observed?.told ?? [],
+    );
     withMissing = {
       ...analysis,
       verdicts,
