@@ -17,6 +17,7 @@ import { Overlay } from '../ui/overlay.js';
 import { Dialogue } from '../ui/dialogue.js';
 import { Reality } from '../ui/reality.js';
 import { ChatInput } from '../ui/chatinput.js';
+import { Ending } from '../ui/ending.js';
 import { TILE, ROOM_TOP, buildBaseTextures, objectTexture, THEMES } from '../render/textures.js';
 
 const STEP_MS = 160;                          // 한 칸 이동 시간 (ART.md §3)
@@ -30,6 +31,11 @@ const DIRS = {
 export class RoomScene extends Phaser.Scene {
   constructor() {
     super('room');
+  }
+
+  /** 타이틀·설문이 넘겨주는 것. 사진에서 온 방이거나, 이어하기거나, 둘 다 아니거나. */
+  init(data = {}) {
+    this.entry = data;
   }
 
   create() {
@@ -55,6 +61,8 @@ export class RoomScene extends Phaser.Scene {
 
     // Act 4. 게임이 점수를 다 0으로 만든 다음에야 뜬다 — 여기서만 점수가 붙는다
     this.reality = new Reality((score, verdict) => this.passReality(score, verdict));
+    // 마지막 화면. 설명하지 않는다 — 숫자를 나란히 두는 것으로 충분하다
+    this.ending = new Ending(() => { save.clear(); this.scene.start('title'); });
 
     // 직접 말하기. **자기 얘기는 오직 여기서만 나온다** (listening.js)
     this.chat = new ChatInput(this);
@@ -82,8 +90,14 @@ export class RoomScene extends Phaser.Scene {
       this.fireOpening();          // 세계가 섰으니 DAY 1 무대를 깐다
     });
 
-    // 이어할 게 있으면 이어한다. 10일짜리 게임이 새로고침에 날아가면 안 된다
-    if (!this.restore(save.load())) this.loadRoom(0);
+    // 들어온 경로에 따라 시작이 다르다
+    if (this.entry?.resume && this.restore(save.load())) {
+      /* 타이틀에서 [이어하기] */
+    } else if (this.entry?.vision) {
+      this.loadVision(this.entry.vision, '내 방');       // 방금 찍은 방
+    } else if (!this.restore(save.load())) {
+      this.loadRoom(0);                                  // 준비된 방
+    }
 
     // 방향키·Space가 페이지를 스크롤시키지 않게 브라우저 기본 동작을 막는다
     this.input.keyboard.addCapture('UP,DOWN,LEFT,RIGHT,SPACE,W,A,S,D');
@@ -171,6 +185,18 @@ export class RoomScene extends Phaser.Scene {
     this.overlay.drawHud(this.clock, this.todayScore, this.total);
     this.refresh();
     this.persist();
+
+    // 한 박자 두고 마지막 화면. 점수가 뜨는 걸 먼저 보게 한다
+    const opened = (this.observer?.told ?? []).filter((t) => t.self);
+    const last = opened[opened.length - 1] ?? null;
+    this.time.delayedCall(1800, () => this.ending.show({
+      days: this.clock.day,
+      inGame: Math.max(0, this.total - score),
+      real: score,
+      saw: verdict?.saw ?? '',
+      told: last?.text ?? '',
+      toWhom: last?.to ?? '',
+    }));
   }
 
   /** 새 게임. 골 맵은 게임마다 새로 지어지고 붕괴도 풀린다. */

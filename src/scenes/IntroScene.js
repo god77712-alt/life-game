@@ -7,6 +7,7 @@ import { GRID_W, GRID_H } from '../room/schema.js';
 import { TILE, ROOM_TOP } from '../render/textures.js';
 import { SURVEY, isComplete } from '../game/survey.js';
 import { Chooser } from '../ui/chooser.js';
+import { RoomPhoto } from '../ui/roomphoto.js';
 
 const W = GRID_W * TILE;
 const H = ROOM_TOP + GRID_H * TILE;
@@ -98,8 +99,17 @@ export class IntroScene extends Phaser.Scene {
       duration: 700,
       onComplete: () => {
         this.chooser.destroy();
-        this.scene.start('room');
+        this.askPhoto();
       },
     });
+  }
+
+  /**
+   * Act 0 — 방 사진. **여기가 이 게임의 첫 약속이다.**
+   * 건너뛸 수 있다 — 카메라가 없거나, 보여주기 싫거나, 그냥 게임만 보고 싶을 수 있다.
+   */
+  askPhoto() {
+    const go = (vision) => this.scene.start('room', vision ? { vision } : {});
+    new RoomPhoto(go, () => go(null)).show();
   }
 }

@@ -1,5 +1,6 @@
 import { GRID_W, GRID_H } from './room/schema.js';
 import { TILE, ZOOM, ROOM_TOP } from './render/textures.js';
+import { TitleScene } from './scenes/TitleScene.js';
 import { IntroScene } from './scenes/IntroScene.js';
 import { RoomScene } from './scenes/RoomScene.js';
 import { mountPhotoInput } from './photo.js';
@@ -15,11 +16,11 @@ window.game = new Phaser.Game({
   pixelArt: true,
   roundPixels: true,
   backgroundColor: '#14110f',
-  scene: [IntroScene, RoomScene],   // 설문 → 방
+  scene: [TitleScene, IntroScene, RoomScene],   // 타이틀 → 설문 → (방 사진) → 방
   callbacks: {
     postBoot: (game) => {
       const room = game.scene.getScene('room');
-      mountPhotoInput(room);
+      mountPhotoInput(room);     // DEV 패널의 사진 입력 (정식 흐름은 IntroScene → RoomPhoto)
       mountDevTools(room);
     },
   },
