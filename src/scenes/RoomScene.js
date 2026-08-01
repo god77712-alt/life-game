@@ -13,6 +13,7 @@ import { Observer } from '../game/observer.js';
 import { ambientLine, ambientOverrides } from '../game/ambient.js';
 import { Overlay } from '../ui/overlay.js';
 import { Dialogue } from '../ui/dialogue.js';
+import { Reality } from '../ui/reality.js';
 import { TILE, ROOM_TOP, buildBaseTextures, objectTexture, THEMES } from '../render/textures.js';
 
 const STEP_MS = 160;                          // 한 칸 이동 시간 (ART.md §3)
@@ -48,6 +49,9 @@ export class RoomScene extends Phaser.Scene {
 
     this.overlay = new Overlay(this);
     this.dialogue = new Dialogue(this);
+
+    // Act 4. 게임이 점수를 다 0으로 만든 다음에야 뜬다 — 여기서만 점수가 붙는다
+    this.reality = new Reality((score, verdict) => this.passReality(score, verdict));
 
     // 디렉터가 쓰는 누적 상태. 하루마다 갱신되고 다음 정산의 입력이 된다.
     this.table = { hypotheses: [], avoidance: { pattern: '', evidence: [] } };
@@ -131,9 +135,37 @@ export class RoomScene extends Phaser.Scene {
     this.rebuild();
   }
 
+  /**
+   * 골 맵을 지도에 붙이고 화면에 반영한다. 정산 응답과 DEV 치트가 같은 길을 쓴다.
+   * @returns {boolean} 붙였는가 (이미 있으면 false)
+   */
+  registerGoal(goal) {
+    if (!registerGoalMap(goal)) return false;
+    this.goal = goal;
+    if (this.mapId === 'street') this.buildMap();   // 지금 골목에 서 있으면 문이 바로 생겨야 한다
+    this.refresh();
+    return true;
+  }
+
+  /** 현실에서 실제로 했다. **이 게임에서 점수가 붙는 마지막 행동** (DESIGN.md §2 R). */
+  passReality(score, verdict) {
+    this.realityDone = true;
+    this.total += score;                       // scoreFor를 안 거친다 — 붕괴가 막지 못하는 유일한 점수
+    this.todayScore += score;
+    this.todayLog.push({ label: '현실 — 이불 개기 (사진 인증)', tier: 'R', score });
+    this.lastAction = `현실 이불 개기  +${score}`;
+    this.dialogueLog.push({ at: this.clock.label, from: '현실', saw: verdict?.saw ?? '', score });
+    this.overlay.popScore(this.gx * TILE + TILE / 2, ROOM_TOP + (this.gy + 1) * TILE - 6, score);
+    this.overlay.drawHud(this.clock, this.todayScore, this.total);
+    this.refresh();
+  }
+
   /** 새 게임. 골 맵은 게임마다 새로 지어지고 붕괴도 풀린다. */
   resetEnding() {
     clearGoalMap();
+    this.reality?.close();
+    this.realityDone = false;
+    this.collapsedOn = null;
     this.collapsed = false;
     this.collapseNext = false;
     this.mirrorTurn = 0;
@@ -187,7 +219,17 @@ export class RoomScene extends Phaser.Scene {
       if (bed) this.paint(bed, 'made');
     }
     // 거울을 만난 다음 기상부터 전 행동 +0. 여기서 딱 한 번 넘어간다
-    if (this.collapseNext) { this.collapsed = true; this.collapseNext = false; }
+    if (this.collapseNext) {
+      this.collapsed = true;
+      this.collapseNext = false;
+      this.collapsedOn = this.clock.day;
+    }
+    // 붕괴 하루가 지나야 현실 전환이다 (DESIGN.md §3 Act 4).
+    // 붕괴 당일에 바로 요구하면 "0점이니 딴 걸 하라"는 거래처럼 보인다 —
+    // 하루를 통째로 0점으로 살아본 다음이라야 그게 거래가 아니게 된다.
+    if (this.collapsed && !this.realityDone && this.clock.day > (this.collapsedOn ?? Infinity)) {
+      this.time.delayedCall(1200, () => this.reality.show('이불 개기'));
+    }
     this.applySchedule();           // 정산이 이미 끝나 있으면 바로 예약
 
     this.overlay.drawHud(this.clock, this.todayScore, this.total);
@@ -954,8 +996,7 @@ export class RoomScene extends Phaser.Scene {
         this.pendingAmbient = ambientOverrides(out.plan?.ambient);
         this.settleUsage = out.total;
         // 골 맵이 왔다 = 가설이 확인됐다. 골목 아래에 없던 문이 생긴다 (Act 3)
-        if (out.goal && registerGoalMap(out.goal)) {
-          this.goal = out.goal;
+        if (out.goal && this.registerGoal(out.goal)) {
           console.log('[goal]', out.goal.label, '—', out.goal.reason);
         }
         this.applySchedule();          // 이미 다음 날이면 즉시 반영

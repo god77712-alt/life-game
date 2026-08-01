@@ -7,7 +7,7 @@ import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 
-import { hasKey, roomVision, runAgent, agentList, AGENTS, MODEL } from './agents.mjs';
+import { hasKey, roomVision, checkReality, runAgent, agentList, AGENTS, MODEL } from './agents.mjs';
 import { applyStatus, missing, applyVerdicts, mergeAnalysis } from './hypothesis.mjs';
 import { clearPromptCache } from './prompts.mjs';
 import { stats as cacheStats } from './cache.mjs';
@@ -80,6 +80,36 @@ async function handleRoomVision(req, res) {
     const code = err.code === 'NO_KEY' ? 503 : err.code === 'REFUSAL' ? 422 : 502;
     // 클라이언트는 실패해도 기본 레이아웃으로 폴백한다 (room-vision.md 리스크 표)
     return json(res, code, { error: err.message, code: err.code ?? 'UPSTREAM' });
+  }
+}
+
+/**
+ * Act 4 — 현실 인증. **이 게임에서 점수가 붙는 마지막 요청이다.**
+ *
+ * 방 사진과 똑같이 사진은 이 스코프 밖으로 나가지 않는다.
+ * 실패해도 감점은 없다 — 통과가 아니면 그냥 +0이고 다시 찍을 수 있다.
+ */
+async function handleReality(req, res) {
+  let body;
+  try {
+    body = JSON.parse(await readBody(req));
+  } catch (e) {
+    return json(res, e.code === 'TOO_LARGE' ? 413 : 400, { error: e.message });
+  }
+
+  const { image, mediaType, claim = '이불 개기' } = body ?? {};
+  if (typeof image !== 'string' || !image) return json(res, 400, { error: 'image(base64)가 없다' });
+  if (!ALLOWED_MEDIA.has(mediaType)) return json(res, 400, { error: `지원하지 않는 mediaType: ${mediaType}` });
+
+  const t0 = Date.now();
+  try {
+    const { verdict, usage } = await checkReality(image, mediaType, claim);
+    // 사진 내용은 로그에 남기지 않는다. 통과 여부만
+    console.log(`[reality] ${verdict.passed ? '통과' : verdict.reason} ${Date.now() - t0}ms`);
+    return json(res, 200, { verdict, usage });
+  } catch (err) {
+    console.error(`[reality] fail ${Date.now() - t0}ms  ${err.code ?? ''} ${err.message}`);
+    return json(res, err.code === 'NO_KEY' ? 503 : 502, { error: err.message, code: err.code ?? 'UPSTREAM' });
   }
 }
 
@@ -374,6 +404,9 @@ createServer(async (req, res) => {
   }
   if (url === '/api/room-vision' && req.method === 'POST') {
     return handleRoomVision(req, res);
+  }
+  if (url === '/api/reality' && req.method === 'POST') {
+    return handleReality(req, res);
   }
   if (url.startsWith('/api/agent/') && req.method === 'POST') {
     return handleAgent(req, res, url.slice('/api/agent/'.length));

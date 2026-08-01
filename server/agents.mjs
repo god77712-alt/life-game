@@ -202,6 +202,17 @@ const CHOICES = arr(obj({
   reads_as: str(),                              // 이 선택이 어떤 신호인가
 }));
 
+/**
+ * 현실 인증 — **이 게임에서 점수가 붙는 마지막 행동.**
+ *
+ * 관대하게 본다. 시험이 아니라 확인이다. 실패해도 감점은 없고 다시 찍으면 된다.
+ */
+const REALITY_SCHEMA = obj({
+  passed: { type: 'boolean' },
+  reason: str(['ok', 'different', 'undone', 'unclear']),
+  saw: str(),        // 본 것 한 줄. 칭찬도 평가도 하지 않는다 — 플레이어에게 그대로 보인다
+});
+
 // 거울 대화 — 마지막 장면. 4턴이면 끝난다.
 const MIRROR_SCHEMA = obj({
   lines: arr(obj({ speaker: str(), text: str() })),
@@ -269,6 +280,11 @@ export const AGENTS = {
     role: '거울 — 골 맵의 인물이 플레이어와 나누는 마지막 대화 (실시간)',
     prompt: 'mirror', schema: MIRROR_SCHEMA, effort: 'medium', maxTokens: 3000,
     vars: ['mirror', 'turn', 'history', 'message'],
+  },
+  reality: {
+    role: '현실 인증 — 실제로 한 일의 사진을 확인한다 (게임당 1회, 이것만 점수가 붙는다)',
+    prompt: 'reality', schema: REALITY_SCHEMA, effort: 'medium', maxTokens: 2000,
+    vars: ['claim'],
   },
   'npc-reply': {
     role: '이어가기 — 플레이어가 직접 쓴 말에 NPC가 답한다 (실시간)',
@@ -413,4 +429,13 @@ export async function roomVision(imageBase64, mediaType) {
     image: { data: imageBase64, mediaType },
   });
   return { vision: data, usage };
+}
+
+/** Act 4 — 실제로 한 일의 사진. 방 사진과 똑같이 이 스코프 밖으로 나가지 않는다. */
+export async function checkReality(imageBase64, mediaType, claim) {
+  const { data, usage } = await runAgent('reality', { claim }, {
+    image: { data: imageBase64, mediaType },
+    fresh: true,       // 사람마다 다른 사진이다. 캐시된 판정이 나가면 안 된다
+  });
+  return { verdict: data, usage };
 }

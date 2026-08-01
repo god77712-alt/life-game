@@ -37,6 +37,39 @@ const MOCK_SCRIPTS = [
   },
 ];
 
+// 엔딩을 보려면 게임 안에서 9~10일(실제 80분)을 살아야 한다.
+// 시연 영상을 찍을 때도 필요하므로 마지막 세 장면으로 바로 가는 길을 둔다.
+const MOCK_GOAL = {
+  label: '계단 밑, 그릇이 이미 놓여 있는 자리',
+  theme: 'street',
+  arrive: '밥그릇 두 개 중 하나는 이미 채워져 있고, 물그릇은 바로 놓여 있다.',
+  reason: '(치트) 대면 전달이 문턱이라 주고받는 자리를 없앤 배치',
+  objects: [
+    { type: 'shelf', position: 'mid-right', size: 'large', cleanable: false },
+    { type: 'box', position: 'mid-left', size: 'medium', cleanable: false },
+    { type: 'chair', position: 'bottom-left', size: 'medium', cleanable: false },
+    { type: 'lamp', position: 'top-right', size: 'small', cleanable: false },
+    { type: 'plant', position: 'bottom-right', size: 'large', cleanable: false },
+    { type: 'rug', position: 'bottom-center', size: 'large', cleanable: false },
+    { type: 'bottle', position: 'mid-left', size: 'small', cleanable: false },
+    { type: 'cup', position: 'center', size: 'small', cleanable: false },
+    { type: 'calendar', position: 'left-wall', size: 'small', cleanable: false },
+  ],
+  mirror: {
+    name: '따지 않은 캔을 든 사람',
+    look: 'person',
+    detail: '무릎 위 비닐봉지에 캔이 두 개. 둘 다 아직 안 뜯겨 있다.',
+    opening: '물그릇은 누가 바로 놓고 갔네.',
+    speech: [
+      '한 문장이 짧다. 열 자에서 스무 자 사이.',
+      '자기 얘기는 하려다가 뒤를 흐린다.',
+      '묻는 쪽이다. 답을 받으면 "아" 하고 넘어간다.',
+    ].join('\n'),
+    stuck: '고르는 일과 손대는 일. 캔 두 개 중 어느 걸 딸지 못 정해서 결국 둘 다 안 딴다.',
+    wants: '고양이한테 자기 손으로 밥을 부어주는 것.',
+  },
+};
+
 const btn = (label, title, onClick) => {
   const b = document.createElement('button');
   b.textContent = label;
@@ -95,6 +128,21 @@ export function mountDevTools(scene) {
       scene.sleepMinutes = scene.clock.minutes >= 20 * 60 ? scene.clock.minutes : null;
       scene.nextDay();
       say(`DAY ${scene.clock.day} ${scene.clock.label} 기상`);
+    }),
+
+    btn('골 맵 열기', '가설 확정을 건너뛰고 골목 아래에 골 맵을 붙인다 (Act 3)', () => {
+      if (!scene.registerGoal(MOCK_GOAL)) return say('이미 열려 있다 — 골목 아래쪽 문');
+      say('골목 아래에 문이 생겼다. 방→거실→골목→아래로 가면 거울이 있다');
+    }),
+
+    btn('붕괴 예약', '거울을 만난 것으로 치고, 다음 기상부터 전 행동 +0 (Act 3 끝)', () => {
+      scene.collapseNext = true;
+      say('[다음 날] 을 누르면 붕괴. 그 다음 날 아침에 현실 인증이 뜬다');
+    }),
+
+    btn('현실 인증 띄우기', 'Act 4 창을 지금 연다 (실제 사진 확인 — 약 $0.02)', () => {
+      scene.reality.show('이불 개기');
+      say('실제 이불 사진을 올려보세요. 통과하면 +100');
     }),
 
     btn('시간 ×20', '시계 배속 전환', (b) => {
