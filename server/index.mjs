@@ -104,6 +104,42 @@ async function handleAgent(req, res, name) {
   }
 }
 
+// ── 오래 도는 작업 ─────────────────────────────────────────
+//
+// 정산은 AI를 4~7개 돌려 95초~5분이 걸린다. 그걸 HTTP 요청 하나로 붙들고 있으면
+// **어느 호스트에 올려도 중간 프록시가 먼저 끊는다** (보통 100~120초).
+// 그래서 접수하고 id만 돌려준 뒤, 클라이언트가 물어보게 한다.
+//
+// 게임은 원래 정산을 기다리지 않으므로(첫 이벤트는 몇 분 뒤다) 체감은 그대로다.
+
+const JOBS = new Map();
+const JOB_TTL = 30 * 60 * 1000;      // 30분. 하루가 그보다 길 수는 없다
+
+function startJob(work) {
+  const id = `j${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+  const job = { id, state: 'running', at: Date.now() };
+  JOBS.set(id, job);
+
+  work()
+    .then((result) => Object.assign(job, { state: 'done', result }))
+    .catch((err) => Object.assign(job, { state: 'failed', error: err.message, code: err.code ?? 'UPSTREAM' }));
+
+  // 오래된 것은 치운다. 서버가 며칠 떠 있어도 메모리가 안 샌다
+  for (const [k, j] of JOBS) if (Date.now() - j.at > JOB_TTL) JOBS.delete(k);
+  return id;
+}
+
+function handleJob(res, id) {
+  const job = JOBS.get(id);
+  if (!job) return json(res, 404, { error: '없는 작업이거나 만료됐다', state: 'gone' });
+  if (job.state === 'running') return json(res, 202, { state: 'running' });
+
+  JOBS.delete(id);                   // 한 번 가져가면 끝. 다시 물어볼 일이 없다
+  return job.state === 'done'
+    ? json(res, 200, { state: 'done', ...job.result })
+    : json(res, 200, { state: 'failed', error: job.error, code: job.code });
+}
+
 /**
  * 어제 세운 예측을 뽑아낸다 — 무대의 프롭과 편성 이벤트 양쪽.
  *
@@ -135,14 +171,7 @@ function predictionsOf(plan) {
  * 그러면 confidence는 오르기만 한다. 독립적이어야 채점이 채점으로 남는다.
  * 병렬로 도는 건 덤이다 — 직렬이면 호출 3개가 이어져 5분 타임아웃에 걸린다.
  */
-async function handleSettle(req, res) {
-  let body;
-  try {
-    body = JSON.parse(await readBody(req));
-  } catch (e) {
-    return json(res, e.code === 'TOO_LARGE' ? 413 : 400, { error: e.message });
-  }
-
+async function runSettle(body) {
   const {
     day = 1, world = null, table = {}, today = {}, plan = null,
     dialogue = [], history = [], cast = [], places = [], observed = null,
@@ -200,7 +229,7 @@ async function handleSettle(req, res) {
     };
   } catch (err) {
     console.error(`[settle] day${day} 분석 실패 ${Date.now() - t0}ms  ${err.code ?? ''} ${err.message}`);
-    return json(res, err.code === 'NO_KEY' ? 503 : 502, { error: err.message, code: err.code ?? 'UPSTREAM', usage });
+    throw err;      // 분석이 없으면 하루가 없다. 작업 자체가 실패다
   }
 
   // 1.5) 가설이 확인됐다 → **골 맵.** 게임당 1회, 여기서만.
@@ -249,14 +278,14 @@ async function handleSettle(req, res) {
     const total = usage.reduce((s, u) => ({ input: s.input + u.input, output: s.output + u.output }), { input: 0, output: 0 });
     console.log(`[settle] day${day} ok ${Date.now() - t0}ms  calls=${usage.length}  in=${total.input} out=${total.output}`);
 
-    return json(res, 200, { analysis: withMissing, plan: d.data, scripts, goal, usage, total });
+    return { analysis: withMissing, plan: d.data, scripts, goal, usage, total };
   } catch (err) {
     const total = usage.reduce((s, u) => ({ input: s.input + u.input, output: s.output + u.output }), { input: 0, output: 0 });
     console.error(`[settle] day${day} 편성 실패 — 분석은 살린다  ${err.code ?? ''} ${err.message}`);
-    return json(res, 200, {
+    return {
       analysis: withMissing, plan: null, scripts: [], goal,
       degraded: `편성 실패: ${err.message}`, usage, total,
-    });
+    };
   }
 }
 
@@ -267,14 +296,7 @@ async function handleSettle(req, res) {
  * 첫인상이 빈 방인 게임을 만들 수는 없다. 그래서 분석 없이 편성만 한 번 돌린다.
  * 아직 아무것도 모르는 상태이므로 디렉터가 하는 일은 **탐색** — 넓게 던져보는 것이다.
  */
-async function handleOpening(req, res) {
-  let body;
-  try {
-    body = JSON.parse(await readBody(req));
-  } catch (e) {
-    return json(res, e.code === 'TOO_LARGE' ? 413 : 400, { error: e.message });
-  }
-
+async function runOpening(body) {
   const { world = null, cast = [], places = [] } = body ?? {};
   const usage = [];
   const t0 = Date.now();
@@ -308,12 +330,23 @@ async function handleOpening(req, res) {
 
     const total = usage.reduce((s, u) => ({ input: s.input + u.input, output: s.output + u.output }), { input: 0, output: 0 });
     console.log(`[opening] ok ${Date.now() - t0}ms  calls=${usage.length}  in=${total.input} out=${total.output}`);
-    return json(res, 200, { plan: d.data, scripts, usage, total });
+    return { plan: d.data, scripts, usage, total };
   } catch (err) {
     // 개막 무대가 없어도 게임은 돈다 — 방과 관찰 대상은 이미 있다
     console.error(`[opening] fail ${Date.now() - t0}ms  ${err.code ?? ''} ${err.message}`);
-    return json(res, err.code === 'NO_KEY' ? 503 : 502, { error: err.message, code: err.code ?? 'UPSTREAM' });
+    throw err;
   }
+}
+
+/** 오래 도는 작업을 접수한다. 즉시 id를 돌려주고, 클라이언트가 /api/job/:id로 물어본다. */
+async function accept(req, res, run) {
+  let body;
+  try {
+    body = JSON.parse(await readBody(req));
+  } catch (e) {
+    return json(res, e.code === 'TOO_LARGE' ? 413 : 400, { error: e.message });
+  }
+  return json(res, 202, { job: startJob(() => run(body)) });
 }
 
 async function serveStatic(req, res, url) {
@@ -346,10 +379,13 @@ createServer(async (req, res) => {
     return handleAgent(req, res, url.slice('/api/agent/'.length));
   }
   if (url === '/api/settle' && req.method === 'POST') {
-    return handleSettle(req, res);
+    return accept(req, res, runSettle);
   }
   if (url === '/api/opening' && req.method === 'POST') {
-    return handleOpening(req, res);
+    return accept(req, res, runOpening);
+  }
+  if (url.startsWith('/api/job/')) {
+    return handleJob(res, url.slice('/api/job/'.length));
   }
   if (url === '/api/reload-prompts') {          // 개발용 — 프롬프트 md만 고치고 반영
     clearPromptCache();

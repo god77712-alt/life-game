@@ -867,6 +867,33 @@ export class RoomScene extends Phaser.Scene {
     this.refresh();
   }
 
+  /**
+   * 오래 도는 작업을 맡기고 결과를 기다린다.
+   *
+   * 서버가 id만 즉시 주고 백그라운드로 돈다 — 정산은 95초~5분이라 요청 하나로 붙들면
+   * 중간 프록시가 먼저 끊는다. 게임은 원래 정산을 안 기다리므로 체감은 그대로다.
+   */
+  async job(path, body) {
+    const r = await fetch(path, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const started = await r.json();
+    if (started.error) throw new Error(started.error);
+    if (!started.job) return started;                 // 옛 서버 호환 — 바로 준 응답
+
+    // 4초마다. 최장 10분까지 기다린다
+    for (let i = 0; i < 150; i++) {
+      await new Promise((done) => setTimeout(done, 4000));
+      const out = await (await fetch(`/api/job/${started.job}`)).json();
+      if (out.state === 'running') continue;
+      if (out.state === 'done') return out;
+      throw new Error(out.error ?? '작업 실패');
+    }
+    throw new Error('작업이 10분을 넘었다');
+  }
+
   /** 디렉터가 무대를 놓을 수 있는 자리. 맵이 늘면 여기에 자동으로 따라온다. */
   placesForDirector() {
     return Object.entries(MAPS).map(([id, m]) => ({
@@ -883,12 +910,7 @@ export class RoomScene extends Phaser.Scene {
     if (this.clock.day !== 1 || this.plan || this.openingFired) return;
     this.openingFired = true;
 
-    fetch('/api/opening', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ world: this.world, cast: this.cast, places: this.placesForDirector() }),
-    })
-      .then((r) => r.json())
+    this.job('/api/opening', { world: this.world, cast: this.cast, places: this.placesForDirector() })
       .then((out) => {
         if (out.error || this.clock.day !== 1) return;       // 늦게 왔으면 그냥 버린다
         this.plan = out.plan;
@@ -923,12 +945,7 @@ export class RoomScene extends Phaser.Scene {
       places: this.placesForDirector(),
     };
 
-    this.settlePromise = fetch('/api/settle', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-    })
-      .then((r) => r.json())
+    this.settlePromise = this.job('/api/settle', body)
       .then((out) => {
         if (out.error) throw new Error(out.error);
         this.table = out.analysis;

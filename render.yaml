@@ -1,0 +1,23 @@
+# Render 배포 설정. 저장소를 연결하면 이 파일을 읽어 알아서 띄운다.
+#
+# **키는 여기 적지 않는다.** sync: false 로 두면 Render 대시보드에서 직접 넣게 되고,
+# 저장소에는 값이 남지 않는다. (.env는 .gitignore에 있다)
+
+services:
+  - type: web
+    name: life-game
+    runtime: node
+    plan: free
+    region: singapore # 한국에서 가장 가깝다
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false # ← 대시보드 Environment에서 직접 입력
+      - key: NODE_VERSION
+        value: "24"
+      # 배포본에서는 응답 캐시를 끈다. 사람마다 다른 게임이어야 하는데
+      # 캐시가 걸리면 다른 플레이어에게 같은 결과가 나갈 수 있다.
+      - key: AI_CACHE
+        value: "0"

@@ -193,6 +193,32 @@ function playDay(day, plan) {
   };
 }
 
+/** 작업이 끝날 때까지 물어본다. 4초 간격, 최장 10분. */
+async function waitJob(id) {
+  for (let i = 0; i < 150; i++) {
+    await new Promise((r) => setTimeout(r, 4000));
+    const out = await getJson(`/api/job/${id}`);
+    if (out.state === 'running') continue;
+    if (out.state === 'done') return out;
+    return { error: out.error ?? '작업 실패' };
+  }
+  return { error: '작업이 10분을 넘었다' };
+}
+
+function getJson(path) {
+  const url = new URL(BASE + path);
+  return new Promise((resolve, reject) => {
+    const req = httpRequest({ hostname: url.hostname, port: url.port, path: url.pathname, method: 'GET' }, (res) => {
+      let raw = '';
+      res.setEncoding('utf8');
+      res.on('data', (c) => { raw += c; });
+      res.on('end', () => { try { resolve(JSON.parse(raw)); } catch { reject(new Error(`응답 파싱 실패: ${raw.slice(0, 200)}`)); } });
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
 /** 타임아웃 없는 POST. 정산 한 번이 5분을 넘을 수 있다. */
 function postJson(path, body) {
   const data = JSON.stringify(body);
@@ -240,9 +266,9 @@ for (let day = startDay; day <= MAX_DAYS; day++) {
   const lived = playDay(day, plan);
   total += lived.today.score;
 
-  // node의 fetch는 응답 헤더를 5분 안에 못 받으면 끊는다(undici 기본값).
-  // 정산은 referee·analyst 병렬 → director → writer로 몇 분이 걸리므로 http로 직접 친다.
-  const out = await postJson('/api/settle', { day, world, table, ...lived, history, cast, places, plan });
+  // 서버가 id만 즉시 주고 백그라운드로 돈다. 결과가 나올 때까지 물어본다.
+  const started = await postJson('/api/settle', { day, world, table, ...lived, history, cast, places, plan });
+  const out = started.job ? await waitJob(started.job) : started;
   if (out.error) {
     console.error(`DAY ${day} 실패: ${out.error}`);
     console.error(`  → 다음 실행은 DAY ${day}부터 이어서 시작한다 (상태 저장됨)`);
