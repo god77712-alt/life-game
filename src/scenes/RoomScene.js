@@ -446,7 +446,8 @@ export class RoomScene extends Phaser.Scene {
     this.dialogue.play(
       { lines: [{ speaker: p.name, text: p.detail || '…' }], choices: [] },
       () => {},
-      { pending: true }
+      // 답이 안 오면 스스로 빠져나온다. 안 그러면 대화창이 열린 채 게임이 멈춘다
+      { pending: true, onGiveUp: () => this.recordPropTalk(p, { lines: [] }, null) }
     );
 
     fetch('/api/agent/writer', {
@@ -496,7 +497,7 @@ export class RoomScene extends Phaser.Scene {
     this.dialogue.play(
       { lines: [{ speaker: p.name, text: first ? (p.opening || p.detail || '…') : '…' }], choices: [] },
       () => {},
-      { pending: true }
+      { pending: true, onGiveUp: () => this.afterMirror(p, { lines: [] }, null) }
     );
 
     fetch('/api/agent/mirror', {
@@ -583,7 +584,13 @@ export class RoomScene extends Phaser.Scene {
     this.dialogue.play(
       { lines: [{ speaker: '나', text }], choices: [] },
       () => {},
-      { pending: true, speaker: to },
+      {
+        pending: true,
+        speaker: to,
+        // 답이 안 와도 **내가 한 말은 이미 기록됐다.** 조용히 닫고 게임을 돌려준다 —
+        // 답장이 없는 것도 이 게임에서는 흔한 일이고, 그 자체가 자료다
+        onGiveUp: () => { this.lastAction = `${to ?? '상대'} — 답이 없다`; this.refresh(); },
+      },
     );
 
     fetch('/api/agent/npc-reply', {

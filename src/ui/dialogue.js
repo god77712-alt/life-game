@@ -17,6 +17,12 @@ const H = ROOM_TOP + GRID_H * TILE;
 const FONT = 'monospace';
 const TYPE_MS = 28;
 
+/**
+ * 뒷말을 얼마나 기다리는가. 넘기면 스스로 빠져나온다.
+ * writer 11초 · npc-reply 6초 · mirror 6초가 실측이므로 넉넉하되 무한하지는 않게.
+ */
+const WAIT_MS = 25000;
+
 const BOX = { x: 6, w: W - 12, h: 92 };
 const COLOR = {
   speaker: '#ffd447', text: '#e8dcc0', option: '#7d6f5c',
@@ -55,7 +61,10 @@ export class Dialogue {
   /**
    * @param {{lines: Array<{speaker,text}>, choices: Array, free_input?: boolean}} script
    * @param {(choice: object|null) => void} onDone
-   * @param {{pending?: boolean}} [opts] pending이면 마지막 줄에서 닫지 않고 뒷말을 기다린다
+   * @param {{pending?: boolean, waitMs?: number, onGiveUp?: () => void}} [opts]
+   *   pending이면 마지막 줄에서 닫지 않고 뒷말을 기다린다.
+   *   **기다림에는 반드시 시한이 있다** — 없으면 응답이 안 올 때 대화창이 영영 안 닫히고,
+   *   대화 중에는 이동도 막히므로 게임이 통째로 멈춘다 (실제로 멈췄다).
    */
   play(script, onDone, opts = {}) {
     // 스킵하고 첫 선택지를 누른 것과 다 읽고 망설이다 고른 것은 완전히 다른 일이다.
@@ -66,6 +75,8 @@ export class Dialogue {
     this.onEnd = null;
     this.queued = null;
     this.pending = !!opts.pending;
+    this.waitMs = opts.waitMs ?? WAIT_MS;
+    this.onGiveUp = opts.onGiveUp ?? null;
     this.lineIndex = 0;
     this.phase = 'lines';
     this.open = true;
@@ -109,9 +120,37 @@ export class Dialogue {
     if (this.pending) {                                            // 아직 오는 중
       this.phase = 'waiting';
       this.hint.setText('…');
+      this.startWaitClock();
       return;
     }
     this.hint.setText('[Space]');
+  }
+
+  /**
+   * 기다림에 시한을 건다. 시간이 다 되면 **스스로 빠져나온다.**
+   *
+   * 답이 안 오는 일은 흔하다 — 서버가 느리거나, 끊기거나, 크레딧이 없거나.
+   * 그때 대화창이 열린 채로 남으면 이동도 막혀 게임이 죽는다.
+   * 그래서 시간이 다 되면 조용히 포기하고 `[Space]`로 닫을 수 있게 돌려준다.
+   */
+  startWaitClock() {
+    this.stopWaitClock();
+    this.waitTimer = this.scene.time.delayedCall(this.waitMs, () => {
+      this.waitTimer = null;
+      if (this.phase !== 'waiting') return;      // 그 사이에 왔다
+      const give = this.onGiveUp;
+      this.pending = false;
+      this.onGiveUp = null;
+      // 읽던 글은 그대로 둔다. 힌트만 바꿔 나갈 길을 연다
+      this.phase = 'lines';
+      this.hint.setText('[Space]');
+      if (!this.onEnd) this.onEnd = () => give?.();
+    });
+  }
+
+  stopWaitClock() {
+    this.waitTimer?.remove();
+    this.waitTimer = null;
   }
 
   /** 키 하나로 진행·확정. 게임 본편과 같은 규칙. */
@@ -234,6 +273,7 @@ export class Dialogue {
    */
   continueWith(script) {
     if (!this.open) return;
+    this.stopWaitClock();
     this.queued = script;
     if (this.phase === 'waiting') {      // `…`로 서 있었다 → 이어갈 수 있다고 알린다
       this.phase = 'lines';
@@ -243,6 +283,7 @@ export class Dialogue {
 
   /** 지금 대사를 새 대사로 갈아끼운다. */
   swapTo(script) {
+    this.stopWaitClock();
     this.timer?.remove();
     this.timer = null;
     this.script = script;
@@ -261,6 +302,7 @@ export class Dialogue {
    */
   endWith(speaker, text, onClose) {
     if (!this.open) { onClose?.(); return; }
+    this.stopWaitClock();
     this.onEnd = onClose;
     this.pending = false;
     this.queued = null;
@@ -274,6 +316,8 @@ export class Dialogue {
 
   close() {
     this.open = false;
+    this.stopWaitClock();
+    this.onGiveUp = null;
     this.timer?.remove();
     this.timer = null;
     for (const r of this.rows) r.destroy();
