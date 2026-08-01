@@ -48,6 +48,9 @@ export class IntroScene extends Phaser.Scene {
       return;
     }
 
+    // 손가락 — 화면 아무 데나 누르면 타자를 건너뛴다. 항목은 Chooser가 직접 받는다
+    this.input.on('pointerup', () => this.chooser.confirm());
+
     this.time.delayedCall(500, () => this.askNext());
   }
 

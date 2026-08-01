@@ -227,6 +227,16 @@ export class Dialogue {
       const t = this.scene.add.text(BOX.x + 16, this.y + 10 + i * 15, '', {
         fontFamily: FONT, fontSize: '11px', color: COLOR.option, resolution: 1,
       }).setDepth(9701);
+      // 손가락 — 원하는 항목을 직접 누른다.
+      // 이게 없으면 폰에서는 첫 번째 선택지밖에 못 고른다.
+      // 손끝은 글자보다 굵으므로 잡히는 상자를 줄 높이만큼 넓게 준다
+      t.setInteractive(new Phaser.Geom.Rectangle(-16, -3, BOX.w - 20, 17), Phaser.Geom.Rectangle.Contains);
+      t.on('pointerup', () => {
+        if (this.phase !== 'choices') return;
+        // 다른 항목을 눌렀으면 옮긴 것도 '움직였다'로 센다 (기본값을 그냥 누른 게 아니다)
+        if (i !== this.index) { this.attention?.move(); this.index = i; this.paint(); }
+        this.advance();
+      });
       this.rows.push(t);
     });
     this.hint.setText('↑↓ 이동   [Space] 선택');

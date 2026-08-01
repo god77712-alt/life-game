@@ -2,23 +2,41 @@
 <html lang="ko">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <title>힘을 내 히키코모리</title>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
   body {
-    margin: 0; min-height: 100vh;
+    margin: 0; min-height: 100svh;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
     gap: 12px; padding: 16px;
     background: #14110f; color: #a89882;
     font: 13px/1.6 ui-monospace, "Cascadia Mono", Consolas, monospace;
+    /* 폰에서 두 손가락 확대·당겨서 새로고침이 게임 조작과 싸운다 */
+    overscroll-behavior: none;
+    -webkit-text-size-adjust: 100%;
   }
-  #game canvas { display: block; image-rendering: pixelated; }
+  /* 게임 크기는 여기서 정한다. Phaser의 FIT이 이 상자에 비율을 지켜 맞춘다.
+     데스크톱에서는 768px(=384×2)로 도트가 정확히 2배. 폰에서는 화면 폭까지 줄어든다. */
+  #game { width: min(768px, 100%); }
+  #game canvas {
+    display: block; image-rendering: pixelated;
+    width: 100% !important; height: auto !important;
+    touch-action: none;                 /* 캔버스 위에서는 스크롤·확대를 막는다 */
+  }
   #panel {
-    width: 768px; max-width: 100%;
+    width: min(768px, 100%);
     border: 2px solid #3b342e; background: #1c1815;
     padding: 10px 12px;
+  }
+
+  /* 폰 — 화면을 게임에 다 준다. 개발 도구는 접힌 채로 아래에 */
+  @media (max-width: 820px) {
+    body { padding: 0; gap: 0; justify-content: flex-start; }
+    #panel { border-left: 0; border-right: 0; border-bottom: 0; }
+    #panel dl { grid-template-columns: 1fr; }
+    #panel dt { margin-top: 6px; }
   }
   #panel > summary {
     cursor: pointer; font-size: 11px; color: #7d6f5c; letter-spacing: .1em;
@@ -52,8 +70,10 @@
   <details id="panel">
     <summary>개발 도구</summary>
     <dl>
-      <dt>이동</dt>      <dd><kbd>←↑↓→</kbd> / <kbd>WASD</kbd> — 타일 스냅 4방향</dd>
+      <dt>이동</dt>      <dd><kbd>←↑↓→</kbd> / <kbd>WASD</kbd> — 타일 스냅 4방향<br>
+                             <strong>손가락</strong> — 가고 싶은 칸을 누른다</dd>
       <dt>상호작용</dt>  <dd><kbd>Space</kbd> — <strong>키는 이것 하나.</strong> 바라보는 대상이 행동을 정한다<br>
+                             <strong>손가락</strong> — 바라보는 대상을 누른다. 또는 오른쪽 아래 ● 버튼<br>
                              정산창이 뜨면 같은 키로 다음 날</dd>
       <dt>연락</dt>      <dd>시각이 되면 <strong>휴대폰이 울린다.</strong> 말풍선이 저 혼자 뜨지 않는다<br>
                              폰 앞에서 <kbd>Space</kbd> — <strong>언제 여는지가 곧 신호다</strong></dd>

@@ -19,6 +19,7 @@ import { Dialogue } from '../ui/dialogue.js';
 import { Reality } from '../ui/reality.js';
 import { ChatInput } from '../ui/chatinput.js';
 import { Ending } from '../ui/ending.js';
+import { Touch } from '../ui/touch.js';
 import { TILE, ROOM_TOP, buildBaseTextures, objectTexture, THEMES } from '../render/textures.js';
 
 const STEP_MS = 160;                          // 한 칸 이동 시간 (ART.md §3)
@@ -64,6 +65,9 @@ export class RoomScene extends Phaser.Scene {
     this.reality = new Reality((score, verdict) => this.passReality(score, verdict));
     // 마지막 화면. 설명하지 않는다 — 숫자를 나란히 두는 것으로 충분하다
     this.ending = new Ending(() => { save.clear(); this.scene.start('title'); });
+
+    // 손가락도 같은 규칙을 따른다 — 칸을 누르면 걷고, 대상을 누르면 그 행동을 한다
+    this.touch = new Touch(this);
 
     // 직접 말하기. **자기 얘기는 오직 여기서만 나온다** (listening.js)
     this.chat = new ChatInput(this);

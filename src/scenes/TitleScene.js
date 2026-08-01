@@ -70,6 +70,12 @@ export class TitleScene extends Phaser.Scene {
     this.index = 0;
     this.paint();
 
+    // 손가락 — 항목을 직접 누른다. 화면이 좁아도 항목이 크게 잡히도록 폭을 넉넉히
+    this.rows.forEach((row, i) => {
+      row.setInteractive(new Phaser.Geom.Rectangle(-90, -12, 180, 24), Phaser.Geom.Rectangle.Contains);
+      row.on('pointerup', () => { this.index = i; this.paint(); this.choose(); });
+    });
+
     const k = this.input.keyboard;
     k.addCapture('UP,DOWN,LEFT,RIGHT,SPACE,W,A,S,D');
     for (const key of ['UP', 'W']) k.on(`keydown-${key}`, () => this.move(-1));

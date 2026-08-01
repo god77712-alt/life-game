@@ -106,6 +106,14 @@ export class Chooser {
         fontFamily: FONT, fontSize: '11px', color: COLOR.option, resolution: 1,
       }).setDepth(100).setAlpha(0);
       this.rows.push(t);
+      // 손가락 — 항목을 직접 누른다. 손끝은 글자보다 굵으므로 잡히는 상자를 넓게 준다
+      t.setInteractive(new Phaser.Geom.Rectangle(-14, -6, 300, 24), Phaser.Geom.Rectangle.Contains);
+      t.on('pointerup', () => {
+        if (!this.active) return;
+        this.index = i;
+        this.paint();
+        this.confirm();
+      });
       // 위에서부터 하나씩 떠오른다
       this.scene.tweens.add({ targets: t, alpha: 1, duration: 220, delay: i * 90 });
     });
