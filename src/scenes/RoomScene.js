@@ -11,6 +11,7 @@ import { Schedule } from '../game/schedule.js';
 import { initialVitals, tickVitals, afterSleep, vitalsLine } from '../game/vitals.js';
 import { Observer } from '../game/observer.js';
 import { ambientLine, ambientOverrides } from '../game/ambient.js';
+import { discloses } from '../game/listening.js';
 import { Overlay } from '../ui/overlay.js';
 import { Dialogue } from '../ui/dialogue.js';
 import { Reality } from '../ui/reality.js';
@@ -435,6 +436,7 @@ export class RoomScene extends Phaser.Scene {
 
   /** 거울의 한 턴이 끝났다. 4턴을 채웠으면 붕괴를 예약한다. */
   afterMirror(p, script, choice) {
+    this.recordListening(choice, p.name);
     this.mirrorLog ??= [];
     for (const l of script.lines ?? []) {
       this.mirrorLog.push({ speaker: l.speaker, text: l.text });
@@ -462,7 +464,18 @@ export class RoomScene extends Phaser.Scene {
     this.refresh();
   }
 
+  /** 대화 하나가 끝났다. 얼마나 들었는지, 자기 얘기를 했는지 담는다 (listening.js). */
+  recordListening(choice, to) {
+    this.observer.listen(this.dialogue.lastAttention, this.clock.label);
+    this.dialogue.lastAttention = null;
+    // 선택지는 남이 써준 말이다. **직접 친 것만** 자기 얘기로 센다
+    if (choice?.typed && choice.text) {
+      this.observer.tell(discloses(choice.text, this.typedBaseline ?? 0), this.clock.label, to);
+    }
+  }
+
   recordPropTalk(p, script, choice) {
+    this.recordListening(choice, p.name);
     for (const l of script.lines ?? []) {
       this.dialogueLog.push({ at: this.clock.label, speaker: l.speaker, text: l.text, from: '무대' });
     }
@@ -891,6 +904,7 @@ export class RoomScene extends Phaser.Scene {
     this.labelBox.setVisible(false);
 
     this.dialogue.play(item.script, (choice) => {
+      this.recordListening(choice, item.script.lines?.[0]?.speaker ?? null);
       // 원문 그대로 남긴다 — 심리상담 확장의 유일한 자산 (DESIGN.md §4)
       for (const l of item.script.lines) {
         this.dialogueLog.push({ at: this.clock.label, speaker: l.speaker, text: l.text });

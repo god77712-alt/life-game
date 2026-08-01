@@ -97,3 +97,45 @@ test('아무것도 안 해도 터지지 않는다', () => {
   assert.deepEqual(s.engaged, []);
   assert.deepEqual(s.places, []);
 });
+
+// ── 들었는가 · 말했는가 ─────────────────────────────────────
+// 이 게임의 목표는 "이 사람이 누군가에게 자기 얘기를 하는 것"이다.
+// 그게 일어났는지를 코드가 세지 못하면 가설 검증 전체가 허공에 뜬다.
+
+test('상대별로 얼마나 들었는지가 남는다 — 스킵 자체가 신호다', () => {
+  const o = new Observer();
+  o.listen({ speaker: '엄마', lines: 3, read: 0, skipped: 3, moved: 0 }, '10:30');
+  o.listen({ speaker: '지훈', lines: 4, read: 1, skipped: 0, moved: 2 }, '21:40');
+
+  const { listened } = o.summary();
+  assert.equal(listened.length, 2);
+  assert.equal(listened.find((l) => l.speaker === '엄마').read, 0);
+  assert.equal(listened.find((l) => l.speaker === '지훈').read, 1);
+});
+
+test('자기 얘기를 한 건수를 센다 — 최종 지표', () => {
+  const o = new Observer();
+  o.tell({ text: '걔 이름 있어?', self: false, marks: [] }, '16:31', '지훈');
+  o.tell({ text: '나도 요즘 그래', self: true, marks: ['1인칭', '자기 시점 표지'] }, '21:40', '지훈');
+
+  const s = o.summary();
+  assert.equal(s.opened_up, 1);
+  assert.equal(s.told.length, 2, '개방이 아닌 것도 원문은 남긴다');
+  assert.equal(s.told.find((t) => t.self).to, '지훈', '누구에게 열었는지가 가설의 핵심이다');
+});
+
+test('아무 말도 안 했으면 0이다 — 없는 걸 만들지 않는다', () => {
+  const s = new Observer().summary();
+  assert.equal(s.opened_up, 0);
+  assert.deepEqual(s.told, []);
+  assert.deepEqual(s.listened, []);
+});
+
+test('null은 담지 않는다', () => {
+  const o = new Observer();
+  o.listen(null, '10:00');
+  o.tell(null, '10:00', '엄마');
+  const s = o.summary();
+  assert.equal(s.listened.length, 0);
+  assert.equal(s.told.length, 0);
+});

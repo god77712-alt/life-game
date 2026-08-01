@@ -9,6 +9,7 @@
 // 실패하든, 플레이어가 키를 누르기 전까지 박스는 그대로 있는다.
 
 import { GRID_W, GRID_H } from '../room/schema.js';
+import { Attention } from '../game/listening.js';
 import { TILE, ROOM_TOP } from '../render/textures.js';
 
 const W = GRID_W * TILE;
@@ -57,6 +58,9 @@ export class Dialogue {
    * @param {{pending?: boolean}} [opts] pending이면 마지막 줄에서 닫지 않고 뒷말을 기다린다
    */
   play(script, onDone, opts = {}) {
+    // 스킵하고 첫 선택지를 누른 것과 다 읽고 망설이다 고른 것은 완전히 다른 일이다.
+    // 로그에는 똑같이 "c2를 골랐다"로만 남았다 — 이제 센다 (listening.js)
+    this.attention = new Attention(script?.lines?.[0]?.speaker ?? opts.speaker ?? null);
     this.script = script;
     this.onDone = onDone;
     this.onEnd = null;
@@ -75,6 +79,7 @@ export class Dialogue {
 
   typeLine() {
     const line = this.script.lines[this.lineIndex];
+    this.attention?.line();
     this.speaker.setText(line.speaker ?? '');
     this.full = line.text ?? '';
     this.shown = 0;
@@ -115,6 +120,7 @@ export class Dialogue {
 
     if (this.phase === 'lines') {
       if (this.timer && this.shown < this.full.length) {   // 타자 중 → 이 줄을 끝까지
+        this.attention?.skip();                            // 다 나오기 전에 눌렀다
         this.shown = this.full.length;
         this.body.setText(this.full);
         this.lineDone();
@@ -131,6 +137,8 @@ export class Dialogue {
       }
       if (this.pending) return;                            // 뒷말이 아직 안 왔다
       if (this.onEnd) {                                    // 이어질 게 없다 → 여기서 끝
+        if (this.attention) this.attention.abandoned = this.phase === 'choices';
+        this.lastAttention = this.attention?.summary() ?? null;
         const done = this.onEnd;
         this.onEnd = null;
         this.close();
@@ -146,12 +154,15 @@ export class Dialogue {
     const opt = this.options[this.index];
     if (opt?.free) { this.openInput(); return; }
 
+    this.attention?.chose();
+    this.lastAttention = this.attention?.summary() ?? null;
     this.close();
     this.onDone?.(opt ?? null);
   }
 
   move(delta) {
     if (!this.open || this.phase !== 'choices' || !this.rows.length) return;
+    this.attention?.move();                    // 0이면 기본값을 그냥 누른 것
     this.index = (this.index + delta + this.rows.length) % this.rows.length;
     this.paint();
   }
@@ -159,6 +170,7 @@ export class Dialogue {
   showChoices() {
     const choices = this.script.choices ?? [];
     if (!choices.length) {          // 선택지가 없는 이벤트는 읽고 끝
+      this.lastAttention = this.attention?.summary() ?? null;
       this.close();
       this.onDone?.(null);
       return;
@@ -179,6 +191,7 @@ export class Dialogue {
       this.rows.push(t);
     });
     this.hint.setText('↑↓ 이동   [Space] 선택');
+    this.attention?.choicesShown();
     this.paint();
   }
 
@@ -194,6 +207,7 @@ export class Dialogue {
 
   /** 텍스트 입력 모드. 실제 입력은 HTML input이 받는다 (IME 때문에 canvas로는 무리) */
   openInput() {
+    this.attention && (this.attention.typed = true);   // 자기 말을 하려 한다
     this.phase = 'input';
     for (const r of this.rows) r.destroy();
     this.rows = [];

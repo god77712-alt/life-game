@@ -21,6 +21,8 @@ export class Observer {
     this.engaged = [];        // 실제로 한 것
     this.passed = [];         // 바라봤지만 안 한 것
     this.notifications = [];  // 알림 도착 ~ 열람
+    this.listened = [];       // 대화를 얼마나 들었는가 (listening.js)
+    this.told = [];           // 자기 얘기를 했는가 — 이 게임의 최종 지표
     this.gaze = null;         // 지금 바라보는 대상
     this.seen = new Map();    // key → 누적 응시 ms
     this.acted = new Set();
@@ -77,6 +79,21 @@ export class Observer {
     });
   }
 
+  // ── 들었는가 · 말했는가 ─────────────────────────────────
+
+  /**
+   * 대화 하나가 끝났다. **판단하지 않고 숫자만 담는다.**
+   * 스킵은 그 대화 내용을 자료에서 빼는 근거이자, 그 자체로 reaction 신호다.
+   */
+  listen(summary, at) {
+    if (summary) this.listened.push({ ...summary, at });
+  }
+
+  /** 직접 친 문장. 자기 개방인지는 listening.js가 표식으로 판정한다. */
+  tell(disclosure, at, to) {
+    if (disclosure) this.told.push({ ...disclosure, at, to });
+  }
+
   // ── 알림 ────────────────────────────────────────────────
 
   notify(id, from, at) {
@@ -118,6 +135,11 @@ export class Observer {
       passed: passed.sort((a, b) => b.gazed_sec - a.gazed_sec),
       unseen,
       notifications: this.notifications,
+      // 누구 말은 듣고 누구 말은 넘겼는가
+      listened: this.listened,
+      // **이 게임이 하려는 일이 실제로 일어났는가.** 원문 그대로 넘어간다
+      told: this.told,
+      opened_up: this.told.filter((t) => t.self).length,
     };
   }
 }
