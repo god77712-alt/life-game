@@ -10,6 +10,7 @@ import { Clock, SLEEP_FROM, fmt } from '../game/clock.js';
 import { Schedule } from '../game/schedule.js';
 import { initialVitals, tickVitals, afterSleep, vitalsLine } from '../game/vitals.js';
 import { Observer } from '../game/observer.js';
+import { Phone } from '../game/phone.js';
 import { ambientLine, ambientOverrides } from '../game/ambient.js';
 import { discloses } from '../game/listening.js';
 import * as save from '../game/save.js';
@@ -289,6 +290,7 @@ export class RoomScene extends Phaser.Scene {
     this.houseLit = false;          // 집 안 창문/커튼을 하나라도 열었는가 (하루 단위)
     this.done = new Set();          // 오늘 이미 한 행동. 키는 `맵:오브젝트id`
     this.observer = new Observer(); // 반응한 것 · 지나친 것 · 안 본 것
+    this.phone = new Phone();       // 연락은 여기 쌓인다. 여는 것은 플레이어의 선택
     this.metProps = new Set();      // 오늘 이미 다가간 무대
     this.propNames = new Map();     // 관측 키 → 이름
     this.buildMap();
@@ -622,6 +624,30 @@ export class RoomScene extends Phaser.Scene {
       ?? { name: name ?? '상대', relation: '지금 말을 섞고 있는 사람', tone: '평범하다' };
   }
 
+  // ── 휴대폰 ──────────────────────────────────────────────
+
+  /**
+   * 연락이 도착했다. **대화창을 열지 않는다.**
+   * 화면 구석에서 잠깐 알리고 마는 것이 전부다 — 열지 말지는 플레이어가 정한다.
+   */
+  buzz(m) {
+    this.lastAction = `${m.from} — 연락 (${this.phone.unread.length}통 안 읽음)`;
+    this.refresh();
+  }
+
+  /**
+   * 폰을 연다. 가장 오래 기다린 것부터.
+   * **여기서 지연이 확정된다** — 몇 시간 만에 열었는지가 reaction 신호의 유일한 출처다.
+   */
+  openPhone() {
+    const m = this.phone.next();
+    if (!m) return;
+    this.phone.open(m.id, this.clock.label, this.clock.minutes);
+    this.observer.open(m.id, this.clock.label, m.delayMin ?? 0);
+    this.talkingTo = m.from;
+    this.playEvent(m.item);
+  }
+
   recordPropTalk(p, script, choice) {
     this.recordListening(choice, p.name);
     for (const l of script.lines ?? []) {
@@ -685,6 +711,17 @@ export class RoomScene extends Phaser.Scene {
     }
     const type = String((a === 'sleep' ? b : a) ?? '').replace(/_\d+$/, '');
     return `${place}의 ${nameOf({ type })}`;
+  }
+
+  /**
+   * 바라보는 대상 위에 뜨는 한 줄. **화면 라벨과 DEV 패널이 같은 걸 쓴다** —
+   * 갈라지면 디버그가 거짓말을 한다.
+   */
+  targetLine(o, done) {
+    if (o.type === 'door') return this.doorLine(o);
+    const waiting = o.type === 'phone' ? this.phone.unread.length : 0;
+    if (waiting) return `휴대폰   ${waiting}통 안 읽음   [Space] 열기`;
+    return promptLine(o, done);
   }
 
   /** 이 공간의 결. 사진에서 온 내 방은 언제나 실내다. */
@@ -772,10 +809,14 @@ export class RoomScene extends Phaser.Scene {
     this.vitals = tickVitals(this.vitals, this.clock.minutes - before);   // 표시용. 규칙엔 영향 없음
     this.overlay.drawHud(this.clock, this.todayScore, this.total);
 
+    // 시각이 되면 **폰이 울린다.** 말풍선이 저 혼자 뜨지 않는다 —
+    // 읽을지 말지가 이 게임이 재려는 신호이기 때문이다 (game/phone.js)
     const due = this.schedule?.due(this.clock.minutes);
     if (due) {
-      this.playEvent(due);
-      return;
+      this.schedule.markPlayed(due.id);
+      const m = this.phone.arrive(due, this.clock.label, this.clock.minutes);
+      this.observer.notify(m.id, m.from, m.at);
+      this.buzz(m);
     }
 
     if (this.moving) {
@@ -895,6 +936,8 @@ export class RoomScene extends Phaser.Scene {
       return;
     }
     if (t.action.verb === 'look') {
+      // 폰은 열 것이 있으면 그걸 먼저 연다. 없으면 평소처럼 들여다본다
+      if (t.obj.type === 'phone' && this.phone.next()) { this.openPhone(); return; }
       this.lookAt(t.obj, t.action);
       return;
     }
@@ -1143,7 +1186,11 @@ export class RoomScene extends Phaser.Scene {
       },
       dialogue: this.dialogueLog,
       // 반응한 것 · 바라보고 지나친 것 · 아예 안 다가간 것 · 알림 응답 지연
-      observed: this.observer.summary((k) => this.labelForKey(k)),
+      observed: {
+        ...this.observer.summary((k) => this.labelForKey(k)),
+        // 끝내 안 연 것도 남는다. 안 열었다는 게 곧 답이다
+        notifications: this.phone.summary(),
+      },
       history: this.history,
       cast: this.cast,
       places: this.placesForDirector(),
@@ -1296,7 +1343,7 @@ export class RoomScene extends Phaser.Scene {
 
     // 라벨은 플레이어와 대상 중 위쪽에 맞춘다 — 캐릭터를 가리지 않게
     const playerTop = ROOM_TOP + (this.gy + 1) * TILE - TILE * 1.5;
-    const line = o.type === 'door' ? this.doorLine(o) : promptLine(o, t.done);
+    const line = this.targetLine(o, t.done);
     this.drawLabel(line, cx, Math.min(top, playerTop) - 6);
   }
 
@@ -1364,10 +1411,10 @@ export class RoomScene extends Phaser.Scene {
 
     const prompt = !t
       ? '—'
-      : t.obj?.type === 'door'
-        ? this.doorLine(t.obj)
       : !t.action
         ? `${promptLine(t.obj, false)}  (행동 없음)`
+        : t.obj.type === 'door' || t.obj.type === 'phone'
+          ? this.targetLine(t.obj, t.done)
         : t.done
           ? `${t.action.label}  (오늘 이미 함)`
           : `[Space] ${t.action.label}${t.action.score ? `  ${t.action.tier} +${t.action.score}` : ''}`;
