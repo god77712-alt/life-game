@@ -1,0 +1,273 @@
+// 게임 중 NPC 대화 — 하단 고정 박스, 글자 한 자씩 (ART.md §5).
+//
+// 키는 상호작용 키 하나. 누를 때마다 정확히 한 단계씩만 나아간다.
+//   타자 중      → 그 줄을 끝까지 다 보여준다 (건너뛰지 않는다)
+//   다 나온 뒤   → 다음 줄. 다음 줄이 없으면 선택지, 선택지도 없으면 대화 종료
+//   응답 대기 중 → 아무 일도 없다 (`…`). 도착하면 다음 줄로 이어진다
+//
+// 원칙: **읽던 글은 어떤 경우에도 화면에서 사라지지 않는다.** 네트워크 응답이 늦게 오든
+// 실패하든, 플레이어가 키를 누르기 전까지 박스는 그대로 있는다.
+
+import { GRID_W, GRID_H } from '../room/schema.js';
+import { TILE, ROOM_TOP } from '../render/textures.js';
+
+const W = GRID_W * TILE;
+const H = ROOM_TOP + GRID_H * TILE;
+const FONT = 'monospace';
+const TYPE_MS = 28;
+
+const BOX = { x: 6, w: W - 12, h: 92 };
+const COLOR = {
+  speaker: '#ffd447', text: '#e8dcc0', option: '#7d6f5c',
+  selected: '#ffd447', hint: '#5a4f42', free: '#8fa6b8',
+};
+
+function bevel(g, x, y, w, h) {
+  g.fillStyle(0x14110f, 0.96).fillRect(x, y, w, h)
+    .fillStyle(0x5a4f42, 1).fillRect(x, y, w, 1).fillRect(x, y, 1, h)
+    .fillStyle(0x0a0806, 1).fillRect(x, y + h - 1, w, 1).fillRect(x + w - 1, y, 1, h);
+}
+
+export class Dialogue {
+  constructor(scene) {
+    this.scene = scene;
+    const y = H - BOX.h - 6;
+    this.y = y;
+
+    this.box = scene.add.graphics().setDepth(9700).setVisible(false);
+    this.speaker = scene.add.text(BOX.x + 8, y + 6, '', {
+      fontFamily: FONT, fontSize: '10px', color: COLOR.speaker, resolution: 1,
+    }).setDepth(9701).setVisible(false);
+    this.body = scene.add.text(BOX.x + 8, y + 22, '', {
+      fontFamily: FONT, fontSize: '11px', color: COLOR.text, resolution: 1,
+      wordWrap: { width: BOX.w - 16 },
+    }).setDepth(9701).setVisible(false);
+    this.hint = scene.add.text(BOX.x + BOX.w - 8, y + BOX.h - 14, '', {
+      fontFamily: FONT, fontSize: '9px', color: COLOR.hint, resolution: 1,
+    }).setOrigin(1, 0).setDepth(9701).setVisible(false);
+
+    this.rows = [];
+    this.options = [];
+    this.open = false;
+  }
+
+  /**
+   * @param {{lines: Array<{speaker,text}>, choices: Array, free_input?: boolean}} script
+   * @param {(choice: object|null) => void} onDone
+   * @param {{pending?: boolean}} [opts] pending이면 마지막 줄에서 닫지 않고 뒷말을 기다린다
+   */
+  play(script, onDone, opts = {}) {
+    this.script = script;
+    this.onDone = onDone;
+    this.onEnd = null;
+    this.queued = null;
+    this.pending = !!opts.pending;
+    this.lineIndex = 0;
+    this.phase = 'lines';
+    this.open = true;
+
+    this.box.clear();
+    bevel(this.box, BOX.x, this.y, BOX.w, BOX.h);
+    for (const o of [this.box, this.speaker, this.body, this.hint]) o.setVisible(true);
+
+    this.typeLine();
+  }
+
+  typeLine() {
+    const line = this.script.lines[this.lineIndex];
+    this.speaker.setText(line.speaker ?? '');
+    this.full = line.text ?? '';
+    this.shown = 0;
+    this.body.setText('');
+    this.hint.setText('');
+
+    this.timer?.remove();
+    this.timer = this.scene.time.addEvent({
+      delay: TYPE_MS,
+      repeat: Math.max(0, this.full.length - 1),
+      callback: () => {
+        this.shown += 1;
+        this.body.setText(this.full.slice(0, this.shown));
+        if (this.shown >= this.full.length) this.lineDone();
+      },
+    });
+    if (!this.full.length) this.lineDone();
+  }
+
+  /** 한 줄이 끝났다. 다음에 무엇이 있느냐가 힌트를 정한다. */
+  lineDone() {
+    this.timer?.remove();
+    this.timer = null;
+
+    if (this.lineIndex < this.script.lines.length - 1) { this.hint.setText('▾ [Space]'); return; }
+    if (this.queued) { this.hint.setText('▾ [Space]'); return; }   // 뒷말이 벌써 도착해 있다
+    if (this.pending) {                                            // 아직 오는 중
+      this.phase = 'waiting';
+      this.hint.setText('…');
+      return;
+    }
+    this.hint.setText('[Space]');
+  }
+
+  /** 키 하나로 진행·확정. 게임 본편과 같은 규칙. */
+  advance() {
+    if (!this.open) return;
+
+    if (this.phase === 'lines') {
+      if (this.timer && this.shown < this.full.length) {   // 타자 중 → 이 줄을 끝까지
+        this.shown = this.full.length;
+        this.body.setText(this.full);
+        this.lineDone();
+        return;
+      }
+      if (this.queued) {                                   // 기다리던 뒷말로 넘어간다
+        this.swapTo(this.queued);
+        return;
+      }
+      if (this.lineIndex < this.script.lines.length - 1) { // 다음 줄
+        this.lineIndex += 1;
+        this.typeLine();
+        return;
+      }
+      if (this.pending) return;                            // 뒷말이 아직 안 왔다
+      if (this.onEnd) {                                    // 이어질 게 없다 → 여기서 끝
+        const done = this.onEnd;
+        this.onEnd = null;
+        this.close();
+        done?.();
+        return;
+      }
+      this.showChoices();
+      return;
+    }
+
+    if (this.phase !== 'choices') return;      // waiting·input 중에는 키가 안 먹는다
+
+    const opt = this.options[this.index];
+    if (opt?.free) { this.openInput(); return; }
+
+    this.close();
+    this.onDone?.(opt ?? null);
+  }
+
+  move(delta) {
+    if (!this.open || this.phase !== 'choices' || !this.rows.length) return;
+    this.index = (this.index + delta + this.rows.length) % this.rows.length;
+    this.paint();
+  }
+
+  showChoices() {
+    const choices = this.script.choices ?? [];
+    if (!choices.length) {          // 선택지가 없는 이벤트는 읽고 끝
+      this.close();
+      this.onDone?.(null);
+      return;
+    }
+    this.phase = 'choices';
+    this.index = 0;
+
+    // 선택지 + 마지막 줄은 항상 '직접 말하기'.
+    // 정해진 답만 있으면 하고 싶은 말을 할 수가 없다.
+    this.options = [...choices, { id: '__free', text: '직접 말하기…', free: true }];
+
+    this.body.setText('');
+    this.speaker.setText('');
+    this.options.forEach((c, i) => {
+      const t = this.scene.add.text(BOX.x + 16, this.y + 10 + i * 15, '', {
+        fontFamily: FONT, fontSize: '11px', color: COLOR.option, resolution: 1,
+      }).setDepth(9701);
+      this.rows.push(t);
+    });
+    this.hint.setText('↑↓ 이동   [Space] 선택');
+    this.paint();
+  }
+
+  paint() {
+    this.options.forEach((c, i) => {
+      const on = i === this.index;
+      this.rows[i]?.setText(`${on ? '▸ ' : '  '}${c.text}`)
+        .setColor(on ? COLOR.selected : (c.free ? COLOR.free : COLOR.option));
+    });
+  }
+
+  // ── 자유 입력 ───────────────────────────────────────────
+
+  /** 텍스트 입력 모드. 실제 입력은 HTML input이 받는다 (IME 때문에 canvas로는 무리) */
+  openInput() {
+    this.phase = 'input';
+    for (const r of this.rows) r.destroy();
+    this.rows = [];
+    this.speaker.setText('나');
+    this.body.setText('');
+    this.hint.setText('[Enter] 말하기   [Esc] 취소');
+    this.onInputOpen?.();
+  }
+
+  setInputText(text) {
+    if (this.phase === 'input') this.body.setText(text + '▌');
+  }
+
+  // ── 뒤늦게 도착하는 말 ──────────────────────────────────
+
+  /**
+   * 생성된 대사가 도착했다. **바로 갈아끼우지 않는다** — 쌓아두고 키를 기다린다.
+   *
+   * 화면의 글이 바뀌는 건 언제나 플레이어가 키를 눌렀을 때뿐이어야 한다.
+   * 응답이 언제 오느냐에 따라 읽던 글이 저 혼자 바뀌면 그게 곧 버그로 보인다.
+   */
+  continueWith(script) {
+    if (!this.open) return;
+    this.queued = script;
+    if (this.phase === 'waiting') {      // `…`로 서 있었다 → 이어갈 수 있다고 알린다
+      this.phase = 'lines';
+      this.hint.setText('▾ [Space]');
+    }
+  }
+
+  /** 지금 대사를 새 대사로 갈아끼운다. */
+  swapTo(script) {
+    this.timer?.remove();
+    this.timer = null;
+    this.script = script;
+    this.lineIndex = 0;
+    this.phase = 'lines';
+    this.pending = false;
+    this.queued = null;
+    for (const r of this.rows) r.destroy();
+    this.rows = [];
+    this.typeLine();
+  }
+
+  /**
+   * 이어질 게 없어졌다 (생성 실패 등). 읽던 줄은 그대로 두고 `[Space]`로 닫게 한다.
+   * 갑자기 닫으면 글이 사라진 것처럼 보인다.
+   */
+  endWith(speaker, text, onClose) {
+    if (!this.open) { onClose?.(); return; }
+    this.onEnd = onClose;
+    this.pending = false;
+    this.queued = null;
+    if (this.timer) return;              // 아직 읽는 중 — 다 읽으면 lineDone이 [Space]를 띄운다
+
+    if (speaker != null) this.speaker.setText(speaker);
+    if (text != null) { this.full = text; this.shown = text.length; this.body.setText(text); }
+    this.phase = 'lines';                // waiting에서 풀어준다
+    this.hint.setText('[Space]');
+  }
+
+  close() {
+    this.open = false;
+    this.timer?.remove();
+    this.timer = null;
+    for (const r of this.rows) r.destroy();
+    this.rows = [];
+    this.options = [];
+    this.queued = null;
+    this.pending = false;
+    this.onEnd = null;
+    this.phase = null;
+    for (const o of [this.box, this.speaker, this.body, this.hint]) o.setVisible(false);
+    this.box.clear();
+    this.onInputClose?.();
+  }
+}

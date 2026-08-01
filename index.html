@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>힘을 내 히키코모리</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 12px; padding: 16px;
+    background: #14110f; color: #a89882;
+    font: 13px/1.6 ui-monospace, "Cascadia Mono", Consolas, monospace;
+  }
+  #game canvas { display: block; image-rendering: pixelated; }
+  #panel {
+    width: 768px; max-width: 100%;
+    border: 2px solid #3b342e; background: #1c1815;
+    padding: 10px 12px;
+  }
+  #panel h2 { margin: 0 0 6px; font-size: 12px; color: #c9b799; letter-spacing: .08em; }
+  #panel dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 2px 14px; }
+  #panel dt { color: #7d6f5c; }
+  #panel dd { margin: 0; color: #c9b799; }
+  #objects { margin-top: 8px; padding-top: 8px; border-top: 1px solid #3b342e;
+             color: #7d6f5c; white-space: pre-wrap; word-break: break-all; }
+  kbd { background: #3b342e; color: #d8c9ae; border-radius: 2px; padding: 0 4px; }
+  .note { color: #7d6f5c; margin-left: 8px; }
+  #dev button {
+    font: inherit; color: #d8c9ae; background: #2a251f;
+    border: 1px solid #5a4f42; border-bottom-color: #0f0c0a; border-right-color: #0f0c0a;
+    padding: 2px 8px; margin: 0 4px 4px 0; cursor: pointer;
+  }
+  #dev button:hover { background: #3b342e; }
+  #dev button:disabled { opacity: .45; cursor: default; }
+  #photo input { font: inherit; color: #c9b799; }
+</style>
+</head>
+<body>
+  <div id="game"></div>
+
+  <div id="panel">
+    <h2>DEV</h2>
+    <dl>
+      <dt>이동</dt>      <dd><kbd>←↑↓→</kbd> / <kbd>WASD</kbd> — 타일 스냅 4방향</dd>
+      <dt>상호작용</dt>  <dd><kbd>Space</kbd> — <strong>키는 이것 하나.</strong> 바라보는 대상이 행동을 정한다<br>
+                             정산창이 뜨면 같은 키로 다음 날</dd>
+      <dt>하루</dt>      <dd>1 실제초 = 2 게임분. 침대에서 <kbd>Space</kbd>로 취침, 또는 자정에 강제 종료<br>
+                             이불을 개야 잘 수 있다 (헝클어진 이불 → 개기 / 개어진 이불 → 자기)</dd>
+      <dt>디버그</dt>    <dd><kbd>G</kbd> 격자·충돌·점수 기회 오버레이</dd>
+      <dt>방 교체</dt>   <dd><kbd>R</kbd> 다음 목 데이터로 재조립 (점수 리셋)</dd>
+      <dt>방 사진</dt>   <dd id="photo"><span class="note">…</span></dd>
+      <dt>테스트</dt>    <dd id="dev"><span class="note">…</span></dd>
+    </dl>
+    <div id="objects">room: —</div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/phaser@3/dist/phaser.min.js"></script>
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>
