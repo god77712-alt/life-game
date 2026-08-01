@@ -412,7 +412,13 @@ createServer(async (req, res) => {
   const url = decodeURIComponent((req.url || '/').split('?')[0]);
 
   if (url === '/api/health') {
-    return json(res, 200, { key: hasKey(), model: MODEL, agents: agentList(), cache: await cacheStats() });
+    // build — 배포본이 어느 커밋인지. 이게 없으면 "고쳤는데 안 된다"가 코드 문제인지
+    // 배포가 아직 안 온 건지 구분할 방법이 없다 (실제로 한참 헤맸다).
+    // Render가 넣어주는 값이고, 로컬에서는 'dev'.
+    return json(res, 200, {
+      build: (process.env.RENDER_GIT_COMMIT || 'dev').slice(0, 7),
+      key: hasKey(), model: MODEL, agents: agentList(), cache: await cacheStats(),
+    });
   }
   if (url === '/api/room-vision' && req.method === 'POST') {
     return handleRoomVision(req, res);
