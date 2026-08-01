@@ -217,9 +217,12 @@ export class Dialogue {
     this.onInputOpen?.();
   }
 
-  setInputText(text) {
-    if (this.phase === 'input') this.body.setText(text + '▌');
-  }
+  /**
+   * 입력 중에는 **캔버스에 글자를 그리지 않는다.**
+   * 같은 자리에 HTML input이 떠 있어서 두 겹으로 겹쳐 보였다.
+   * 조합 중인 한글(ㅎ→하→한)도 input 쪽이 정확하므로 그쪽에 맡긴다.
+   */
+  setInputText() { /* input이 직접 보여준다 (ui/chatinput.js) */ }
 
   // ── 뒤늦게 도착하는 말 ──────────────────────────────────
 

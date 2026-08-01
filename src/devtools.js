@@ -2,6 +2,8 @@
 //
 // 목적: 이벤트를 보려고 하루(실제 8분) + 정산(79초)을 기다리지 않아도 되게.
 
+import * as save from './game/save.js';
+
 const MOCK_SCRIPTS = [
   {
     event: { id: 'mock_1', at: '10:30', kind: 'dialogue', target: 'none', signal_wanted: ['language', 'reaction'] },
@@ -143,6 +145,34 @@ export function mountDevTools(scene) {
     btn('현실 인증 띄우기', 'Act 4 창을 지금 연다 (실제 사진 확인 — 약 $0.02)', () => {
       scene.reality.show('이불 개기');
       say('실제 이불 사진을 올려보세요. 통과하면 +100');
+    }),
+
+    btn('새 게임', '저장을 지우고 DAY 1부터 다시 (되돌릴 수 없다)', () => {
+      save.clear();
+      scene.loadRoom(0);
+      say('저장을 지웠다. DAY 1 14:00');
+    }),
+
+    btn('이어하기 코드', '지금 저장을 문자열로 복사한다. 다른 기기에 붙여넣으면 이어진다', async () => {
+      save.save(scene);
+      const code = save.exportCode();
+      if (!code) return say('저장이 없다');
+      try {
+        await navigator.clipboard.writeText(code);
+        say(`복사됨 ${code.length}자 — 다른 기기에서 [코드로 불러오기]`);
+      } catch {
+        window.prompt('아래를 복사해서 다른 기기에 붙여넣으세요', code);
+        say('창에서 직접 복사하세요');
+      }
+    }),
+
+    btn('코드로 불러오기', '다른 기기에서 만든 이어하기 코드를 붙여넣는다', () => {
+      const code = window.prompt('이어하기 코드를 붙여넣으세요');
+      if (!code) return say('취소');
+      const s2 = save.importCode(code);
+      if (!s2) return say('코드 형식이 아니다 — 저장은 그대로 둔다');
+      scene.restore(s2);
+      say(`DAY ${s2.day} 로 이어감 (누적 ${s2.total})`);
     }),
 
     btn('시간 ×20', '시계 배속 전환', (b) => {

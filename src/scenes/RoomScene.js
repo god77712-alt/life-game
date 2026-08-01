@@ -12,9 +12,11 @@ import { initialVitals, tickVitals, afterSleep, vitalsLine } from '../game/vital
 import { Observer } from '../game/observer.js';
 import { ambientLine, ambientOverrides } from '../game/ambient.js';
 import { discloses } from '../game/listening.js';
+import * as save from '../game/save.js';
 import { Overlay } from '../ui/overlay.js';
 import { Dialogue } from '../ui/dialogue.js';
 import { Reality } from '../ui/reality.js';
+import { ChatInput } from '../ui/chatinput.js';
 import { TILE, ROOM_TOP, buildBaseTextures, objectTexture, THEMES } from '../render/textures.js';
 
 const STEP_MS = 160;                          // 한 칸 이동 시간 (ART.md §3)
@@ -54,6 +56,13 @@ export class RoomScene extends Phaser.Scene {
     // Act 4. 게임이 점수를 다 0으로 만든 다음에야 뜬다 — 여기서만 점수가 붙는다
     this.reality = new Reality((score, verdict) => this.passReality(score, verdict));
 
+    // 직접 말하기. **자기 얘기는 오직 여기서만 나온다** (listening.js)
+    this.chat = new ChatInput(this);
+    this.dialogue.onInputOpen = () => this.chat.show(
+      (text) => this.sayFreely(text),
+      () => this.dialogue.showChoices(),          // 취소하면 선택지로 돌아온다
+    );
+
     // 디렉터가 쓰는 누적 상태. 하루마다 갱신되고 다음 정산의 입력이 된다.
     this.table = { hypotheses: [], avoidance: { pattern: '', evidence: [] } };
     this.history = [];
@@ -73,7 +82,8 @@ export class RoomScene extends Phaser.Scene {
       this.fireOpening();          // 세계가 섰으니 DAY 1 무대를 깐다
     });
 
-    this.loadRoom(0);
+    // 이어할 게 있으면 이어한다. 10일짜리 게임이 새로고침에 날아가면 안 된다
+    if (!this.restore(save.load())) this.loadRoom(0);
 
     // 방향키·Space가 페이지를 스크롤시키지 않게 브라우저 기본 동작을 막는다
     this.input.keyboard.addCapture('UP,DOWN,LEFT,RIGHT,SPACE,W,A,S,D');
@@ -110,7 +120,8 @@ export class RoomScene extends Phaser.Scene {
       this.debugG.setVisible(!this.debugG.visible);
       if (this.debugG.visible) this.drawDebug();
     });
-    this.input.keyboard.on('keydown-R', () => this.loadRoom((this.roomIndex + 1) % MOCK_ROOMS.length));
+    // 'R'(방 교체)은 뺐다 — 채팅 중에 눌리면 게임이 통째로 리셋됐다.
+    // 목 방을 바꿀 일은 개발 초기에만 있었고, 지금은 DEV 패널로 충분하다.
   }
 
   // ── 방 · 하루 ────────────────────────────────────────────
@@ -159,6 +170,7 @@ export class RoomScene extends Phaser.Scene {
     this.overlay.popScore(this.gx * TILE + TILE / 2, ROOM_TOP + (this.gy + 1) * TILE - 6, score);
     this.overlay.drawHud(this.clock, this.todayScore, this.total);
     this.refresh();
+    this.persist();
   }
 
   /** 새 게임. 골 맵은 게임마다 새로 지어지고 붕괴도 풀린다. */
@@ -174,6 +186,56 @@ export class RoomScene extends Phaser.Scene {
     this.goal = null;
     this.plan = null;
     this.table = { hypotheses: [], avoidance: { pattern: '', evidence: [] } };
+  }
+
+  /**
+   * 저장에서 이어한다. 화면에 있는 것(스프라이트·충돌)은 다시 만들면 되므로
+   * **하루의 흐름을 결정하는 것**만 되돌린다.
+   * @returns {boolean} 이어했는가
+   */
+  restore(s) {
+    if (!s) return false;
+    try {
+      this.resetEnding();
+      this.roomIndex = s.roomIndex ?? 0;
+      this.custom = s.room ?? null;
+      this.total = s.total ?? 0;
+      this.survey = s.survey ?? this.survey;
+      this.world = s.world ?? null;
+      this.cast = s.cast ?? [];
+      this.table = s.table ?? this.table;
+      this.history = s.history ?? [];
+      this.plan = s.plan ?? null;
+      this.collapsed = !!s.collapsed;
+      this.collapseNext = !!s.collapseNext;
+      this.collapsedOn = s.collapsedOn ?? null;
+      this.realityDone = !!s.realityDone;
+      this.mirrorTurn = s.mirrorTurn ?? 0;
+      this.mirrorLog = s.mirrorLog ?? [];
+      this.sleptLastNight = s.sleptLastNight !== false;
+      if (s.goal) this.registerGoal(s.goal);        // 골 맵이 열려 있었으면 문도 그대로
+
+      // **그날 아침으로 되돌린다.** 방·관측·오늘 한 일은 rebuild가 초기화하므로,
+      // 19시에 이어붙이면 치운 쓰레기가 되살아난 채 저녁이 된다. 하루 단위가 맞다.
+      this.clock = new Clock();
+      this.clock.day = s.day ?? 1;
+      this.clock.start(s.wake ?? 0);
+      this.vitals = initialVitals();
+      this.rebuild();
+      // 어제 쌓인 원문은 관측에 되돌려 넣는다 — 거울의 재료다
+      for (const t of s.told ?? []) this.observer.told.push(t);
+      this.openingFired = true;                     // DAY 1 편성을 다시 쏘지 않는다
+      this.refresh();
+      return true;
+    } catch (e) {
+      console.warn('[restore]', e.message);
+      return false;
+    }
+  }
+
+  /** 하루가 바뀔 때·정산이 끝날 때 저장한다. 매 프레임 쓰면 느려진다. */
+  persist() {
+    if (this.clock) save.save(this);
   }
 
   get source() {
@@ -235,6 +297,7 @@ export class RoomScene extends Phaser.Scene {
 
     this.overlay.drawHud(this.clock, this.todayScore, this.total);
     this.refresh();
+    this.persist();
   }
 
   /**
@@ -462,6 +525,7 @@ export class RoomScene extends Phaser.Scene {
     this.collapseNext = true;
     p.met = true;
     this.refresh();
+    this.persist();
   }
 
   /** 대화 하나가 끝났다. 얼마나 들었는지, 자기 얘기를 했는지 담는다 (listening.js). */
@@ -472,6 +536,64 @@ export class RoomScene extends Phaser.Scene {
     if (choice?.typed && choice.text) {
       this.observer.tell(discloses(choice.text, this.typedBaseline ?? 0), this.clock.label, to);
     }
+  }
+
+  /**
+   * 플레이어가 직접 친 문장. **이 게임이 받아내려는 것.**
+   *
+   * 원문을 그대로 남기고(요약 금지 — CLAUDE.md), 자기 개방인지 코드가 표식으로 센다.
+   * 그 다음 상대가 답하고, 대화가 이어진다.
+   */
+  sayFreely(text) {
+    const to = this.dialogue.script?.lines?.[0]?.speaker ?? this.talkingTo ?? null;
+
+    this.observer.tell(discloses(text, this.typedBaseline ?? 0), this.clock.label, to);
+    this.dialogueLog.push({ at: this.clock.label, player: { choice: null, text, typed: true }, to });
+    this.chatLog = [...(this.chatLog ?? []), { speaker: '나', text }].slice(-12);
+
+    // 내가 한 말을 먼저 보여주고, 그 사이에 답을 만든다
+    this.dialogue.play(
+      { lines: [{ speaker: '나', text }], choices: [] },
+      () => {},
+      { pending: true, speaker: to },
+    );
+
+    fetch('/api/agent/npc-reply', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        npc: this.castOf(to),
+        context: { day: this.clock.day, at: this.clock.label, place: this.placeLabel() },
+        history: this.chatLog,
+        message: text,
+      }),
+    })
+      .then((r) => r.json())
+      .then((out) => {
+        if (out.error || !this.dialogue.open) throw new Error(out.error ?? 'closed');
+        for (const l of out.data.lines ?? []) {
+          this.chatLog.push({ speaker: l.speaker, text: l.text });
+          this.dialogueLog.push({ at: this.clock.label, speaker: l.speaker, text: l.text, from: '채팅' });
+        }
+        this.dialogue.continueWith(out.data);
+        this.dialogue.onDone = (choice) => {
+          this.recordListening(choice, to);
+          if (choice?.free) return;               // 또 직접 말하기 — onInputOpen이 받는다
+          this.lastAction = `${to ?? '대화'} — ${choice?.text ?? '…'}`;
+          this.refresh();
+        };
+      })
+      .catch((e) => {
+        console.warn('[npc-reply]', e.message);
+        // 답이 없어도 내가 한 말은 남는다. 갑자기 닫지 않는다
+        if (this.dialogue.open) this.dialogue.endWith('나', text, () => this.refresh());
+      });
+  }
+
+  /** 이름으로 배역을 찾는다. 없으면 이름만 넘긴다 — 무대 프롭일 수 있다. */
+  castOf(name) {
+    return (this.cast ?? []).find((c) => c.name === name)
+      ?? { name: name ?? '상대', relation: '지금 말을 섞고 있는 사람', tone: '평범하다' };
   }
 
   recordPropTalk(p, script, choice) {
@@ -1015,6 +1137,7 @@ export class RoomScene extends Phaser.Scene {
         }
         this.applySchedule();          // 이미 다음 날이면 즉시 반영
         this.refresh();
+        this.persist();
         return out;
       })
       .catch((e) => {
