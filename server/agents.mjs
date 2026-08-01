@@ -282,9 +282,9 @@ export const AGENTS = {
     vars: ['event', 'cast', 'context'],
   },
   'goal-map': {
-    role: '골 맵 — confirmed된 가설로 그 사람만의 마지막 장소와 거울을 짓는다 (게임당 1회)',
+    role: '골 맵 — **이 사람이 자기 입으로 한 말**에서 마지막 장소와 거울을 짓는다 (게임당 1회)',
     prompt: 'goal-map', schema: GOAL_SCHEMA, effort: 'high', maxTokens: 12000,
-    vars: ['confirmed', 'avoidance', 'world', 'typed'],
+    vars: ['disclosed', 'confirmed', 'avoidance', 'world', 'typed'],
   },
   mirror: {
     role: '거울 — 골 맵의 인물이 플레이어와 나누는 마지막 대화 (실시간)',

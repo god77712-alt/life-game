@@ -274,13 +274,20 @@ async function runSettle(body) {
   let goal = null;
   if (analysis.confirmed && !body.hasGoal) {
     try {
+      // ★ 자기 얘기만 따로. **무엇을 지을지가 여기서 나온다** —
+      //   `self`는 listening.js가 표식으로 센 값이고, 모델이 판단한 게 아니다.
+      const told = observed?.told ?? [];
+      const disclosed = told
+        .filter((t) => t.self)
+        .map((t) => ({ text: t.text, to: t.to ?? null, at: t.at ?? null }));
+
       const g = await runAgent('goal-map', {
+        // 없으면 없다고 말한다. 있는 척하면 모델이 사연을 지어낸다
+        disclosed: disclosed.length ? disclosed : '(자기 얘기가 한 줄도 없다 — 재료가 얇다)',
         confirmed: analysis.confirmed,
         avoidance: analysis.avoidance,
         world,
-        typed: (dialogue ?? [])
-          .filter((d) => d.player?.typed && d.player.text)
-          .map((d) => d.player.text),
+        typed: told.map((t) => t.text).filter(Boolean),
       });
       usage.push(g.usage);
       goal = g.data;
