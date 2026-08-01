@@ -411,6 +411,13 @@ async function serveStatic(req, res, url) {
 createServer(async (req, res) => {
   const url = decodeURIComponent((req.url || '/').split('?')[0]);
 
+  // 깨워두기용. **무료 플랜은 15분 놀면 잠들고, 깨우는 데 50초가 걸린다** —
+  // 심사위원이 링크를 눌렀을 때 그 50초를 만나면 그걸로 끝이다.
+  // 외부 크론이 10분마다 여기를 친다. health와 달리 디스크를 읽지 않는다.
+  if (url === '/api/ping') {
+    return json(res, 200, { ok: true, build: (process.env.RENDER_GIT_COMMIT || 'dev').slice(0, 7) });
+  }
+
   if (url === '/api/health') {
     // build — 배포본이 어느 커밋인지. 이게 없으면 "고쳤는데 안 된다"가 코드 문제인지
     // 배포가 아직 안 온 건지 구분할 방법이 없다 (실제로 한참 헤맸다).
