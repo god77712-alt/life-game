@@ -11,6 +11,7 @@
 import { GRID_W, GRID_H } from '../room/schema.js';
 import { Attention } from '../game/listening.js';
 import { TILE, ROOM_TOP } from '../render/textures.js';
+import { fitHitArea } from './hitarea.js';
 
 const W = GRID_W * TILE;
 const H = ROOM_TOP + GRID_H * TILE;
@@ -229,8 +230,7 @@ export class Dialogue {
       }).setDepth(9701);
       // 손가락 — 원하는 항목을 직접 누른다.
       // 이게 없으면 폰에서는 첫 번째 선택지밖에 못 고른다.
-      // 손끝은 글자보다 굵으므로 잡히는 상자를 줄 높이만큼 넓게 준다
-      t.setInteractive(new Phaser.Geom.Rectangle(-16, -3, BOX.w - 20, 17), Phaser.Geom.Rectangle.Contains);
+      // 판정 영역은 글이 들어온 뒤 paint()에서 맞춘다
       t.on('pointerup', () => {
         if (this.phase !== 'choices') return;
         // 다른 항목을 눌렀으면 옮긴 것도 '움직였다'로 센다 (기본값을 그냥 누른 게 아니다)
@@ -247,8 +247,13 @@ export class Dialogue {
   paint() {
     this.options.forEach((c, i) => {
       const on = i === this.index;
-      this.rows[i]?.setText(`${on ? '▸ ' : '  '}${c.text}`)
+      const t = this.rows[i];
+      if (!t) return;
+      t.setText(`${on ? '▸ ' : '  '}${c.text}`)
         .setColor(on ? COLOR.selected : (c.free ? COLOR.free : COLOR.option));
+      // 대화 상자 안쪽을 줄마다 띠로 나눠 갖는다. 높이는 줄 간격(15)까지 —
+      // 넘기면 위아래 줄이 겹쳐서 엉뚱한 선택지가 눌린다
+      fitHitArea(t, { left: -16, width: BOX.w - 20, height: 15 });
     });
   }
 

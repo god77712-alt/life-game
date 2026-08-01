@@ -75,6 +75,8 @@ export class RoomScene extends Phaser.Scene {
       (text) => this.sayFreely(text),
       () => this.dialogue.showChoices(),          // 취소하면 선택지로 돌아온다
     );
+    // 엔딩에서 타이틀로 나가면 이 씬은 버려진다. input 상자와 resize 리스너를 걷는다
+    this.events.once('shutdown', () => this.chat.destroy());
 
     // 디렉터가 쓰는 누적 상태. 하루마다 갱신되고 다음 정산의 입력이 된다.
     this.table = { hypotheses: [], avoidance: { pattern: '', evidence: [] } };

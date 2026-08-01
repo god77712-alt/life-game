@@ -3,6 +3,7 @@
 
 import { GRID_W, GRID_H } from '../room/schema.js';
 import { TILE, ROOM_TOP } from '../render/textures.js';
+import { fitHitArea } from './hitarea.js';
 
 const W = GRID_W * TILE;                 // 384
 const H = ROOM_TOP + GRID_H * TILE;      // 352
@@ -106,8 +107,7 @@ export class Chooser {
         fontFamily: FONT, fontSize: '11px', color: COLOR.option, resolution: 1,
       }).setDepth(100).setAlpha(0);
       this.rows.push(t);
-      // 손가락 — 항목을 직접 누른다. 손끝은 글자보다 굵으므로 잡히는 상자를 넓게 준다
-      t.setInteractive(new Phaser.Geom.Rectangle(-14, -6, 300, 24), Phaser.Geom.Rectangle.Contains);
+      // 손가락 — 항목을 직접 누른다. 판정 영역은 글이 들어온 뒤 paint()에서 맞춘다
       t.on('pointerup', () => {
         if (!this.active) return;
         this.index = i;
@@ -129,9 +129,13 @@ export class Chooser {
       const label = opt.numeric
         ? (on ? `◂ ${this.numValue} ▸` : opt.label)
         : (opt.label ?? String(opt.value));
-      this.rows[i]
-        ?.setText(`${on ? '▸ ' : '  '}${label}`)
-        .setColor(on ? COLOR.selected : COLOR.option);
+      const t = this.rows[i];
+      if (!t) return;
+      t.setText(`${on ? '▸ ' : '  '}${label}`).setColor(on ? COLOR.selected : COLOR.option);
+      // 손가락 — 줄 왼쪽 끝부터 화면 오른쪽 끝까지 띠로 잡는다.
+      // 높이는 줄 간격(16)까지만. 24를 주면 위아래 줄이 8px씩 겹쳐
+      // 두 줄 사이를 누를 때 위 줄이 먹는다 (globalTopOnly).
+      fitHitArea(t, { left: -14, width: W - this.x, height: 16 });
     });
     const opt = this.options[this.index];
     this.hint.setText(opt?.numeric ? '←→ 나이   [Space] 선택' : '↑↓ 이동   [Space] 선택');

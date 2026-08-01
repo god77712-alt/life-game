@@ -51,6 +51,11 @@ export class ChatInput {
     this.place();
     this.onResize = () => this.place();
     window.addEventListener('resize', this.onResize);
+    // 폰에서는 키보드가 올라오면 **화면이 줄지 않고 위로 밀린다.** window resize는
+    // 그때 안 울리는 기기가 있어서, 입력칸이 캔버스 위 옛 자리에 그대로 남는다.
+    // visualViewport가 그 움직임을 알려주는 유일한 통로다.
+    window.visualViewport?.addEventListener('resize', this.onResize);
+    window.visualViewport?.addEventListener('scroll', this.onResize);
   }
 
   /** 대화 상자 안쪽에 겹쳐 놓는다. 캔버스가 확대돼 있으므로 배율을 곱한다. */
@@ -92,6 +97,11 @@ export class ChatInput {
     kb.enabled = false;
     kb.clearCaptures();
     this.el.focus();
+
+    // 키보드가 다 올라온 뒤에 자리를 다시 잡는다. focus 직후엔 아직 안 올라와 있다.
+    // 그리고 입력칸이 키보드에 가려졌으면 보이는 데까지 끌어올린다 —
+    // 자기 얘기를 치는 곳인데 자기가 친 글이 안 보이면 안 된다.
+    for (const ms of [120, 350, 700]) setTimeout(() => this.place(), ms);
   }
 
   send() {
@@ -120,6 +130,8 @@ export class ChatInput {
 
   destroy() {
     window.removeEventListener('resize', this.onResize);
+    window.visualViewport?.removeEventListener('resize', this.onResize);
+    window.visualViewport?.removeEventListener('scroll', this.onResize);
     this.el.remove();
   }
 }

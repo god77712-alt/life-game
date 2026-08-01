@@ -10,6 +10,7 @@
 import { GRID_W, GRID_H } from '../room/schema.js';
 import { TILE, ROOM_TOP } from '../render/textures.js';
 import * as save from '../game/save.js';
+import { fitHitArea } from '../ui/hitarea.js';
 
 const W = GRID_W * TILE;
 const H = ROOM_TOP + GRID_H * TILE;
@@ -70,11 +71,13 @@ export class TitleScene extends Phaser.Scene {
     this.index = 0;
     this.paint();
 
-    // 손가락 — 항목을 직접 누른다. 화면이 좁아도 항목이 크게 잡히도록 폭을 넉넉히
+    // 손가락 — 항목을 직접 누른다.
+    // **줄 하나를 화면 폭 전체의 띠로 잡는다.** 여기는 게임에서 제일 처음 누르는 곳이라
+    // 빗나가면 그대로 막힌다. 높이는 줄 간격(22)까지 — 넘기면 옆 줄과 겹친다.
     this.rows.forEach((row, i) => {
-      row.setInteractive(new Phaser.Geom.Rectangle(-90, -12, 180, 24), Phaser.Geom.Rectangle.Contains);
       row.on('pointerup', () => { this.index = i; this.paint(); this.choose(); });
     });
+    this.fitRows();
 
     const k = this.input.keyboard;
     k.addCapture('UP,DOWN,LEFT,RIGHT,SPACE,W,A,S,D');
@@ -99,6 +102,18 @@ export class TitleScene extends Phaser.Scene {
       const on = i === this.index;
       this.rows[i].setText(`${on ? '▸ ' : '  '}${it.text}`).setColor(on ? C.on : C.off);
     });
+    this.fitRows();     // 글이 바뀌면 폭도 바뀐다. 판정 영역을 다시 맞춘다
+  }
+
+  /**
+   * 줄마다 화면 폭 전체를 덮는 띠를 판정 영역으로 준다.
+   * 글자는 origin(0.5)로 가운데 정렬돼 있고 판정 좌표는 글자 좌상단 기준이므로,
+   * 왼쪽 끝은 `글자폭/2 - 화면중앙`이 된다.
+   */
+  fitRows() {
+    for (const row of this.rows) {
+      fitHitArea(row, { left: row.width / 2 - W / 2, width: W, height: 22 });
+    }
   }
 
   choose() {

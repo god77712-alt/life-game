@@ -21,18 +21,32 @@ export class Touch {
   /** @param {Phaser.Scene} scene RoomScene */
   constructor(scene) {
     this.scene = scene;
-    this.enabled = matchMedia('(hover: none)').matches || 'ontouchstart' in window;
+    // 손가락이 있는 기기인가. `hover: none` 하나만 보면 놓치는 기기가 있다 —
+    // maxTouchPoints가 제일 곧은 신호다 (터치 노트북까지 잡히지만, 잡혀도 손해가 없다)
+    this.enabled = navigator.maxTouchPoints > 0
+      || matchMedia('(hover: none)').matches
+      || 'ontouchstart' in window;
 
-    scene.input.on('pointerdown', (p) => { this.down = { x: p.x, y: p.y }; });
+    // **손가락마다 따로 센다.** 슬롯 하나에 담으면 두 번째 손가락이 첫 번째의
+    // 시작점을 덮어써서, 원래 손가락을 뗄 때 엉뚱한 거리로 재고 탭이 통째로 무시된다.
+    // 폰에서는 손바닥이 스치는 것만으로도 이 일이 일어난다.
+    this.down = new Map();
+
+    scene.input.on('pointerdown', (p) => { this.down.set(p.id, { x: p.x, y: p.y }); });
     scene.input.on('pointerup', (p) => {
-      const d = this.down;
-      this.down = null;
+      const d = this.down.get(p.id);
+      this.down.delete(p.id);
       if (!d) return;
-      if (Math.hypot(p.x - d.x, p.y - d.y) > TAP_SLOP) return;   // 스크롤이었다
+      if (Math.hypot(p.x - d.x, p.y - d.y) > TAP_SLOP) return;   // 쓸어넘긴 것이다
       this.tap(p.x, p.y);
     });
 
     if (this.enabled) this.mountButton();
+
+    // 씬이 다시 시작되면(엔딩 → 타이틀 → 방) 이 객체는 버려진다.
+    // 그때 ● 버튼을 걷지 않으면 화면에 죽은 버튼이 겹겹이 쌓인다 —
+    // 각자 이미 끝난 씬을 붙들고 있어서 누르면 아무 일도 안 난다.
+    scene.events.once('shutdown', () => this.destroy());
   }
 
   /**
@@ -86,8 +100,9 @@ export class Touch {
   mountButton() {
     const style = document.createElement('style');
     style.textContent = `
-      #tapkey{position:fixed;right:18px;bottom:calc(18px + env(safe-area-inset-bottom));
-        z-index:60;width:62px;height:62px;border-radius:50%;
+      /* 아래쪽에 개발 도구 막대가 깔려 있다. 그 위로 올라앉는다 */
+      #tapkey{position:fixed;right:16px;bottom:calc(46px + env(safe-area-inset-bottom));
+        z-index:60;width:64px;height:64px;border-radius:50%;
         border:1px solid #5a4f42;background:rgba(20,17,15,.82);color:#ffd447;
         font:600 12px/1 ui-monospace,monospace;letter-spacing:.05em;
         display:grid;place-items:center;cursor:pointer;-webkit-tap-highlight-color:transparent;
