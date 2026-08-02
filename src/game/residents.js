@@ -10,7 +10,9 @@
 //   오늘 무슨 일이 있는가    디렉터 (plan.scenes)   — 그 위에 덧붙는다
 //   무슨 말을 하는가         AI (writer)            — 여기에 대사를 쓰지 않는 이유
 //
-// 이 파일에는 **대사가 없다.** `detail` 한 줄은 다가갔을 때 생성이 끝날 때까지
+// 이 파일에는 **대사도 부탁도 없다.** 부탁을 여기 박으면 엄마는 매일 같은 걸 시키는
+// 사람이 되고, 그러면 관측할 게 없다 — 부탁은 디렉터가 만든다 (game/errands.js).
+// `detail` 한 줄은 다가갔을 때 생성이 끝날 때까지
 // 띄워둘 첫 줄일 뿐이고, 대화는 여전히 매번 새로 쓰인다.
 // 여기에 대사를 박는 순간 7/31에 걷어낸 그 구조로 돌아간다.
 
@@ -55,7 +57,6 @@ const RESIDENTS = {
       npc: 'mom', name: '엄마', look: 'person', slot: 'a',
       chance: () => 0.6,                     // 있을 때도 있고 없을 때도 있다
       detail: '엄마가 소파 끝에 앉아 티비를 보고 있다.',
-      request: { key: 'laundry_basket_1', text: '빨래바구니 좀 비워달라고 했다' },
     },
     {
       // 엄마가 없는 날엔 쪽지가 남아 있다. **빈 거실을 만들지 않는다**
@@ -68,7 +69,6 @@ const RESIDENTS = {
       npc: 'clerk', name: '편의점 알바생', look: 'person', slot: 'a',
       chance: () => 1,                       // 편의점에 사람이 없을 수는 없다
       detail: '알바생이 계산대 안쪽에 서 있다.',
-      request: { key: 'shelf_1', text: '선반 정리하는 걸 도와달라고 했다' },
     },
   ],
   park: [
@@ -77,7 +77,6 @@ const RESIDENTS = {
       // 낮에는 자주, 밤에는 거의 없다
       chance: (min) => (isDaytime(min) ? 0.75 : 0.1),
       detail: '벤치 쪽에서 낯익은 얼굴이 이쪽을 본다.',
-      request: { key: 'chair_1', text: '같이 좀 앉아 있자고 했다' },
     },
     {
       npc: 'homeless', name: '노숙자', look: 'person', slot: 'b',
@@ -112,7 +111,7 @@ const RESIDENTS = {
  * @param {number} minutes 게임 내 시각 (자정을 넘겼으면 1440 이상)
  * @param {number} day
  * @returns {Array<{npc:string|null, name:string, look:string, slot:string, detail:string,
- *                  request?:{key:string,text:string}, resident:true}>}
+ *                  wants?:string[], resident:true}>}
  */
 export function residentsAt(mapId, minutes, day) {
   const list = RESIDENTS[mapId] ?? [];
@@ -143,7 +142,6 @@ function pack(r) {
     look: r.look,
     slot: r.slot,
     detail: r.detail,
-    request: r.request ?? null,
     wants: r.wants ?? null,
     resident: true,
     // 디렉터의 프롭과 같은 모양으로 맞춘다 — 씬은 둘을 구분하지 않고 그린다

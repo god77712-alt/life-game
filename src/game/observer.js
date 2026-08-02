@@ -68,13 +68,24 @@ export class Observer {
     this.seen.set(g.key, (this.seen.get(g.key) ?? 0) + g.ms);
   }
 
-  /** 실제로 상호작용했다 */
-  act(key, name, at, kind) {
+  /**
+   * 실제로 상호작용했다.
+   *
+   * `why` — **같은 행동도 이유가 다르면 다른 신호다.** 빨래바구니를 비운 것이
+   * 스스로 한 청소인지(L1 행동), 엄마가 시켜서인지(관계), 물건을 사려고 들른 것인지
+   * (경제 행동)는 완전히 다른 읽기다. 구분이 없으면 analyst가 매번 다르게 지어낸다.
+   *   self    스스로
+   *   errand  누가 부탁해서 (for: 그 사람)
+   *   shop    사거나 먹으려고 — **관계 신호로 읽으면 안 되는 행동**
+   */
+  act(key, name, at, kind, why = null) {
     this.closeGaze();
     this.acted.add(key);
     this.here?.touched.add(key);
     this.engaged.push({
       what: name, place: this.here?.place ?? '?', at, kind,
+      why: why?.why ?? 'self',
+      for: why?.for ?? null,
       gazed_sec: Math.round((this.seen.get(key) ?? 0) / 100) / 10,
     });
   }

@@ -217,12 +217,45 @@ const AMBIENT_SCHEMA = arr(obj({
   line: str(),      // 한 줄. 판단 없이 본 것만
 }));
 
+/**
+ * 부탁 — 오늘 누가 무엇을 부탁하는가. **고정 문자열이 아니다.**
+ *
+ * 부탁을 코드에 박으면 엄마는 매일 같은 걸 시키는 사람이 되고, 그러면 관측할 게 없다.
+ * 대신 **코드가 확인할 수 있는 형태**여야 한다 — "기분 좀 풀어줘"는 판정할 방법이 없다.
+ * kind/target으로 좁히고, 못 알아먹는 건 클라이언트가 조용히 버린다 (game/errands.js).
+ *
+ * **대가는 없다.** 포인트를 주면 "엄마라서 했다"와 "포인트라서 했다"가 섞여
+ * 관계 신호가 오염된다. 안 하는 것도 자유이고, 안 한 것이 곧 자료다.
+ */
+const ERRAND_SCHEMA = arr(obj({
+  npc: str(),                                        // 부탁하는 사람 id (mom/friend/…)
+  text: str(),                                       // 뭐라고 부탁하는가 — 한 줄
+  kind: str(['clean', 'look', 'visit', 'give']),     // 코드가 확인할 수 있는 종류만
+  target: str(),                                     // 오브젝트 type · 맵 id · 아이템 id
+  why: str(),                                        // 왜 하필 오늘 이걸 시키는가
+}));
+
+/**
+ * 인물의 지금 상태. **날짜를 넘어 이어진다.**
+ *
+ * 없으면 "친구가 집을 나왔다"가 하루짜리 연출로 끝난다 — 오늘 집을 나온 친구가
+ * 내일은 아무 일 없던 사람이 된다. 그러면 "사흘째 안 갔다"는 문장을 만들 수가 없고,
+ * 그 문장이 바로 이 게임이 읽으려는 것이다.
+ */
+const CAST_STATE_SCHEMA = arr(obj({
+  name: str(),          // cast의 이름
+  situation: str(),     // 지금 어떤 상황인가. 안 바뀌었으면 어제 것 그대로
+  since: { type: 'integer' },   // 며칠째인가 (day)
+}));
+
 // 편성 — 무엇을 언제 왜 던질지 + 오늘의 무대
 const PLAN_SCHEMA = obj({
   pacing: str(['순조로움', '늘어짐', '정체']),
   reasoning: str(),
   ambient: AMBIENT_SCHEMA,
   scenes: SCENE_SCHEMA,
+  errands: ERRAND_SCHEMA,
+  cast_state: CAST_STATE_SCHEMA,
   events: arr(obj({
     id: str(),
     at: str(),                                  // "10:30" 게임 내 시각
@@ -334,7 +367,7 @@ export const AGENTS = {
   director: {
     role: '편성 — 내일 무엇을 언제 왜 던질지 정한다',
     prompt: 'director', schema: PLAN_SCHEMA, effort: 'high', maxTokens: 14000,
-    vars: ['day', 'world', 'table', 'analysis', 'history', 'places'],
+    vars: ['day', 'world', 'table', 'analysis', 'history', 'places', 'cast', 'errands'],
   },
   writer: {
     role: '집필 — 편성 1건을 실제 대사와 선택지로 만든다',

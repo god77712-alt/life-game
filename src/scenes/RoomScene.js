@@ -4,12 +4,13 @@
 import { validateVision, GRID_W, GRID_H } from '../room/schema.js';
 import { buildRoom } from '../room/mapper.js';
 import { MOCK_ROOMS } from '../room/mock.js';
-import { MAPS, ROOM_EXIT, returnWall, GOAL_ID, registerGoalMap, clearGoalMap } from '../game/maps.js';
+import { MAPS, ROOM_EXIT, returnWall, GOAL_ID, registerGoalMap, clearGoalMap, mapList } from '../game/maps.js';
 import { actionFor, potentialScore, promptLine, nameOf } from '../game/actions.js';
 import { Clock, fmt } from '../game/clock.js';
 import { residentsAt, timeBand } from '../game/residents.js';
 import { initialAffinity, raise, affinityLines, affinityOf } from '../game/affinity.js';
 import { ITEMS, POINT_PER_SCORE, buy, take, has, bagList, wantedFrom, itemLabel } from '../game/shop.js';
+import * as errands from '../game/errands.js';
 import { Schedule } from '../game/schedule.js';
 import { initialVitals, tickVitals, afterSleep, vitalsLine } from '../game/vitals.js';
 import { Observer } from '../game/observer.js';
@@ -25,6 +26,9 @@ import { ChatInput } from '../ui/chatinput.js';
 import { Ending } from '../ui/ending.js';
 import { Touch } from '../ui/touch.js';
 import { TILE, ROOM_TOP, buildBaseTextures, objectTexture, THEMES } from '../render/textures.js';
+
+/** 부탁을 할 수 있는 사람들. 여기 없는 id로 온 부탁은 버려진다 (game/residents.js와 같은 키) */
+const NPC_IDS = ['mom', 'clerk', 'friend', 'homeless', 'cat'];
 
 const STEP_MS = 160;                          // 한 칸 이동 시간 (ART.md §3)
 const DIRS = {
@@ -316,7 +320,7 @@ export class RoomScene extends Phaser.Scene {
     this.phone = new Phone();       // 연락은 여기 쌓인다. 여는 것은 플레이어의 선택
     this.metProps = new Set();      // 오늘 이미 다가간 무대
     this.propNames = new Map();     // 관측 키 → 이름
-    this.doneRequests = new Set();  // 오늘 들어준 부탁. 하나는 하루 한 번
+    this.errands = [];             // 오늘의 부탁. 디렉터가 만든다 (game/errands.js)
     this.gaveTo = new Set();       // 오늘 뭔가 건넨 상대. 가방과 포인트는 날짜를 넘어 남는다
     this.buildMap();
     this.enterPlace();
@@ -478,6 +482,8 @@ export class RoomScene extends Phaser.Scene {
     this.observer.act(p.key, `${this.placeLabel()}의 ${p.name}`, this.clock.label, 'approach');
     this.metProps.add(p.key);
     this.talkingProp = p;         // 자유 입력의 호감도가 누구에게 가는지
+    // 오늘 이 사람이 부탁할 게 있으면 여기서 듣는다. **듣기 전에는 완료되지 않는다**
+    const errand = this.hearErrands(p.npc);
     p.met = true;
 
     if (p.isMirror) { this.talkToMirror(p); return; }   // 마지막 장면은 다른 AI가 맡는다
@@ -501,10 +507,12 @@ export class RoomScene extends Phaser.Scene {
           signal_wanted: [p.signal ?? 'behavior'],
           // 붙박이 인물에게는 대사가 없다 — 여기 상황만 넘기고 **말은 매번 새로 쓰인다**.
           // 여기에 대사를 박으면 7/31에 걷어낸 고정 NPC 구조로 돌아간다 (game/residents.js)
-          beat: p.resident
+          beat: (p.resident
             ? `${p.detail} ${timeBand(this.clock.minutes)}이다.`
-              + (p.request && !this.doneRequests.has(p.key) ? ` 지나가는 말로 ${p.request.text}.` : '')
-            : (p.opening || p.detail || p.name),
+            : (p.opening || p.detail || p.name))
+            // 부탁이 있으면 **대사 안에서** 꺼내게 한다. 문장은 디렉터가 썼고 말투는 writer가 만든다.
+            // 대가는 없다 — 들어줄지 말지는 플레이어가 정하고, 안 하는 것도 자료다
+            + (errand ? ` 이 사람이 오늘 부탁할 게 있다: "${errand.text}". 대가는 걸지 않는다.` : ''),
         },
         cast: this.cast,
         context: {
@@ -752,6 +760,7 @@ export class RoomScene extends Phaser.Scene {
         if (!r.ok) { this.lastAction = r.reason; this.refresh(); return; }
         this.points = r.points;
         this.bag = r.bag;
+        this.observer.act(`shop:${choice.id}`, `편의점에서 ${itemLabel(choice.id)}`, this.clock.label, 'buy', { why: 'shop', for: null });
         this.lastAction = `${itemLabel(choice.id)} 샀다  −${ITEMS[choice.id].price}P`;
         this.overlay.popNotice(`−${ITEMS[choice.id].price}P`);
         this.persist();
@@ -841,15 +850,34 @@ export class RoomScene extends Phaser.Scene {
     this.persist();
   }
 
-  /** 그 공간에서 방금 한 행동이 누군가의 부탁이었는가 */
-  checkRequests(objectId) {
-    for (const p of this.props ?? []) {
-      if (!p.npc || !p.request || p.request.key !== objectId) continue;
-      if (this.doneRequests.has(p.key)) continue;          // 부탁 하나는 하루 한 번
-      this.doneRequests.add(p.key);
-      this.raiseAffinity(p, 'favor');
-      this.lastAction = `${p.name}의 부탁을 들어줬다`;
+  /**
+   * 방금 한 행동이 **들은 적 있는** 부탁이었는가.
+   *
+   * 우연히 한 것은 안 센다 — 만나서 듣지 않은 부탁이 저절로 닫히면
+   * "부탁을 들어줬다"가 부풀려지고, 그게 곧 관계 신호의 오염이다 (game/errands.js).
+   *
+   * **대가는 호감도뿐이다.** 포인트를 주면 "엄마라서 했다"와 "포인트라서 했다"가 섞인다.
+   */
+  closeErrands(action) {
+    const r = errands.complete(this.errands, action, this.clock.label);
+    if (!r.closed.length) return;
+    this.errands = r.errands;
+    for (const e of r.closed) {
+      const p = (this.props ?? []).find((x) => x.npc === e.npc);
+      if (p) this.raiseAffinity(p, 'favor');
+      else this.affinity = raise(this.affinity, e.npc, 'favor').state;   // 그 자리에 없어도 전해진다
+      this.lastAction = `${this.npcNames.get(e.npc) ?? e.npc}의 부탁 — ${e.text}`;
     }
+    this.persist();
+  }
+
+  /** 다가가서 부탁을 들었다. **듣기 전에는 완료되지 않는다** */
+  hearErrands(npc) {
+    if (!npc) return null;
+    const before = errands.openOf(this.errands, npc).length;
+    this.errands = errands.ask(this.errands, npc, this.clock.label);
+    const open = errands.openOf(this.errands, npc);
+    return open.length > before ? open[open.length - 1] : (open[0] ?? null);
   }
 
   /** 상태창에 띄울 호감도 목록. 만난 적 있는 사람만 */
@@ -885,6 +913,7 @@ export class RoomScene extends Phaser.Scene {
   }
 
   enterPlace() {
+    this.closeErrands?.({ kind: 'visit', target: this.mapId });
     this.placeEnteredAt = this.clock.minutes;
     this.observer.enterPlace(this.placeLabel(), this.clock.label, this.availableHere());
   }
@@ -1179,9 +1208,12 @@ export class RoomScene extends Phaser.Scene {
     const cy = (o.onWall && o.y === 0 ? ROOM_TOP + TILE : ROOM_TOP + (o.y + o.h) * TILE) - 6;
 
     const key = this.doneKey(t.action);
-    this.observer.act(key, `${this.placeLabel()}의 ${nameOf(o)}`, this.clock.label, t.action.verb);
+    // **같은 행동도 이유가 다르면 다른 신호다** — 스스로 한 청소인지 시켜서인지
+    const deed = { kind: t.action.verb === 'clean' ? 'clean' : t.action.verb, target: o.type };
+    const why = errands.whyOf(this.errands, deed);
+    this.observer.act(key, `${this.placeLabel()}의 ${nameOf(o)}`, this.clock.label, t.action.verb, why);
     this.done.add(key);
-    this.checkRequests(t.action.key);      // 이게 누군가의 부탁이었을 수 있다
+    this.closeErrands(deed);               // 들은 적 있는 부탁이었으면 닫힌다
     const got = this.scoreFor(t.action.score);      // 붕괴 이후엔 0
     this.todayScore += got;
     this.total += got;
@@ -1437,6 +1469,8 @@ export class RoomScene extends Phaser.Scene {
       },
       history: this.history,
       cast: this.cast,
+      // 부탁 — **안 한 것이 빠지면 이 체계를 만든 이유가 없다**
+      errands: errands.summary(this.errands),
       places: this.placesForDirector(),
     };
 
@@ -1478,6 +1512,8 @@ export class RoomScene extends Phaser.Scene {
   applySchedule() {
     if (!this.pendingScripts || this.settling) return;
     this.schedule = new Schedule(this.pendingScripts, this.clock.wake);
+    // 부탁도 오늘 것으로 갈아끼운다. 못 알아먹는 건 errands.js가 버린다
+    this.errands = errands.accept(this.plan?.errands, [...mapList(), 'room'], NPC_IDS);
     this.pendingScripts = null;
     if (this.pendingAmbient) { this.ambient = this.pendingAmbient; this.pendingAmbient = null; }
   }

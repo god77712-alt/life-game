@@ -205,6 +205,7 @@ async function runSettle(body) {
   const {
     day = 1, world = null, table = {}, today = {}, plan = null,
     dialogue = [], history = [], cast = [], places = [], observed = null,
+    errands = [],   // 어제 부탁한 것들 — **안 한 것이 여기 남는다**
   } = body ?? {};
   const usage = [];
   const t0 = Date.now();
@@ -303,7 +304,9 @@ async function runSettle(body) {
   //    한 번 편성 절단 때문에 confirmed 하루를 통째로 잃은 적이 있다.
   try {
     const d = await runAgent('director', {
-      day, world, table: withMissing, analysis: a.data.note, history, places,
+      day, world, table: withMissing, analysis: a.data.note, history, places, cast,
+      // 어제 뭘 부탁했고 뭘 안 했는지. 같은 걸 또 시킬지 말지는 디렉터가 정한다
+      errands,
     });
     usage.push(d.usage);
 
@@ -347,6 +350,8 @@ async function runOpening(body) {
     const d = await runAgent('director', {
       day: 1,
       world,
+      cast,
+      errands: [],
       table: { hypotheses: [], avoidance: { pattern: '(아직 없음)', evidence: [] } },
       // "탐색이다"라고만 쓰면 조심스럽게 굴다가 이벤트를 0건 낸다 (실제로 그랬다).
       // 첫날은 밀도가 곧 첫인상이므로 개수를 못박는다.
