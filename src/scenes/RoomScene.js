@@ -13,6 +13,7 @@ import { Observer } from '../game/observer.js';
 import { Phone } from '../game/phone.js';
 import { ambientLine, ambientOverrides } from '../game/ambient.js';
 import { discloses } from '../game/listening.js';
+import { settleLines, devLine } from '../game/table.js';
 import * as save from '../game/save.js';
 import { Overlay } from '../ui/overlay.js';
 import { Dialogue } from '../ui/dialogue.js';
@@ -861,7 +862,9 @@ export class RoomScene extends Phaser.Scene {
     if (k.down.isDown || k.s.isDown) return 'down';
     if (k.left.isDown || k.a.isDown) return 'left';
     if (k.right.isDown || k.d.isDown) return 'right';
-    return null;
+    // 이동 패드를 누르고 있는 것도 키를 누르고 있는 것과 같다 (ui/touch.js).
+    // 반복은 여기 폴링이 만든다 — 패드 쪽은 방향이 바뀔 때만 말을 건넨다
+    return this.touch?.held ?? null;
   }
 
   tryStep(dir) {
@@ -1209,6 +1212,9 @@ export class RoomScene extends Phaser.Scene {
       places: this.placesForDirector(),
     };
 
+    this.settleError = null;
+    this.settlePending = true;
+
     this.settlePromise = this.job('/api/settle', body)
       .then((out) => {
         if (out.error) throw new Error(out.error);
@@ -1222,6 +1228,8 @@ export class RoomScene extends Phaser.Scene {
           console.log('[goal]', out.goal.label, '—', out.goal.reason);
         }
         this.applySchedule();          // 이미 다음 날이면 즉시 반영
+        this.settlePending = false;
+        this.drawSettlement();         // 아직 정산창을 보고 있다면 그 자리에서 갱신된다
         this.refresh();
         this.persist();
         return out;
@@ -1229,6 +1237,8 @@ export class RoomScene extends Phaser.Scene {
       .catch((e) => {
         console.warn('[settle]', e.message);
         this.settleError = e.message;
+        this.settlePending = false;
+        this.drawSettlement();         // 실패도 화면에 적는다. 조용히 실패하면 안 된다
         this.refresh();
         return null;
       });
@@ -1259,15 +1269,36 @@ export class RoomScene extends Phaser.Scene {
     if (this.schedule) this.history = [...this.history, ...this.schedule.toHistory(this.clock.day)].slice(-8);
     this.fireSettle();
 
-    this.overlay.showSettlement({
+    this.settleShown = {
       day: this.clock.day,
       reason,
       sleepMinutes: this.sleepMinutes,
       log: this.todayLog,
       todayScore: this.todayScore,
       total: this.total,
-    });
+    };
+    this.drawSettlement();
     this.refresh();
+  }
+
+  /**
+   * 정산창을 그린다. **정산이 끝나면 같은 함수로 다시 그린다** —
+   * 플레이어가 이 화면을 보고 있는 95초~5분 동안 디렉터가 읽기를 마치고,
+   * 그 결과가 눈앞에서 채워지는 것이 이 게임에서 AI가 보이는 유일한 장면이다.
+   */
+  drawSettlement() {
+    if (!this.settling || !this.settleShown) return;
+    this.overlay.showSettlement({
+      ...this.settleShown,
+      director: settleLines(this.table, {
+        pending: this.settlePending,
+        error: this.settleError,
+        collapsed: this.collapsed,
+        collapseNext: this.collapseNext,
+        collapsedOn: this.collapsedOn,
+        day: this.clock.day,
+      }),
+    });
   }
 
   // ── 밝기 ────────────────────────────────────────────────
@@ -1445,9 +1476,11 @@ export class RoomScene extends Phaser.Scene {
       this.schedule
         ? `예약   ${this.schedule.items.map((i) => `${i.event.at}${i.played ? '✓' : ''}[${i.event.kind}]`).join('  ') || '없음'}`
         : (this.settlePromise ? '예약   정산 중…' : ''),
-      this.table?.hypotheses?.length
-        ? `가설   ${this.table.hypotheses.map((h) => `${h.desire}(${h.status} ${h.confidence})`).join('  ')}\n       Act ${this.table.act ?? 1}${this.settleUsage ? `   정산비용 in=${this.settleUsage.input} out=${this.settleUsage.output}` : ''}`
-        : '',
+      // 화면(정산창)과 **같은 함수**가 만든 줄. 둘이 갈라지면 디버그가 거짓말을 한다
+      devLine(this.table, {
+        collapsed: this.collapsed, collapseNext: this.collapseNext,
+        collapsedOn: this.collapsedOn, day: this.clock.day,
+      }) + (this.settleUsage ? `   정산비용 in=${this.settleUsage.input} out=${this.settleUsage.output}` : ''),
       this.settleError ? `정산실패 ${this.settleError}` : '',
       this.world
         ? `세계   ${this.world.age}세 · ${this.world.situation}\n       압력: ${this.world.pressure}\n       인물: ${this.cast.map((c) => `${c.name}(${c.presence})`).join(', ')}\n       간극: ${this.gapNote ?? '—'}`

@@ -202,8 +202,11 @@ DAY {{day}}
   "hypotheses": [
     {
       "id": "h_cook",
-      "desire": "요리",
-      "statement": "재료를 직접 고르고 뭔가 만드는 일에 반응한다",
+      "label": "지훈 · 먹는 것 얘기 · 밤에 나갔다 온 뒤",
+      "who": "지훈",
+      "through": "먹는 것 · 재료",
+      "when": "밤에 나갔다 온 뒤, 약속 얘기가 안 붙었을 때",
+      "statement": "지훈이 먹는 것 얘기를 꺼내면, 밤 외출 직후에 한해 말이 길어진다",
       "dropped": false,
       "signals": [
         { "day": 4, "kind": "language", "evidence": "도시락은 좀 그래", "reading": "완제품에 대한 거부 — 만드는 쪽에 기울어 있을 수 있다" },

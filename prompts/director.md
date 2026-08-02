@@ -225,8 +225,10 @@ DAY {{day}} 정산. 내일 편성을 짜라.
   "day": 4,
   "table": {
     "hypotheses": [
-      { "id": "h_cook", "desire": "요리", "confidence": 0.35, "status": "forming",
-        "missing": ["confidence 0.35 < 0.7", "검증 0/2회", "신호 부족: reaction"] }
+      { "id": "h_cook", "label": "지훈 · 먹는 것 얘기 · 밤에 나갔다 온 뒤",
+        "who": "지훈", "through": "먹는 것 · 재료", "when": "밤에 나갔다 온 뒤",
+        "confidence": 0.35, "status": "forming",
+        "missing": ["지훈에게 자기 얘기 0/1회", "confidence 0.35 < 0.7", "검증 0/2회", "신호 부족: reaction"] }
     ],
     "avoidance": { "pattern": "사람과 마주칠 시간대를 피한다" }
   },

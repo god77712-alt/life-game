@@ -12,6 +12,7 @@ const FONT = 'monospace';
 const DEPTH = { hud: 9300, pop: 9350, panel: 9600 };
 const POP_MS = 900;    // 점수 숫자가 떠 있는 시간
 const RING_MS = 420;   // 퍼지는 링
+const LOG_MAX = 9;     // 정산창에 적는 행동 줄 수 상한 — 넘으면 상자가 화면을 넘는다
 
 const text = (scene, size, color) => ({
   fontFamily: FONT, fontSize: `${size}px`, color, resolution: 1,
@@ -112,39 +113,31 @@ export class Overlay {
 
   /**
    * 하루의 리듬 단위이자, 나중에 붕괴 연출이 서는 무대 (DESIGN.md §2).
-   * @param {{day:number, reason:string, sleepMinutes:number, log:Array, todayScore:number, total:number}} s
+   *
+   * `director`는 이미 문장으로 만들어져서 온다 (`game/table.js`).
+   * 여기서는 그리기만 한다 — 같은 문자열을 DEV 패널도 쓰기 때문에
+   * 만드는 자리가 둘로 갈리면 화면과 디버그가 서로 다른 말을 하게 된다.
+   *
+   * @param {{day:number, reason:string, sleepMinutes:number, log:Array,
+   *          todayScore:number, total:number, director?:string[]}} s
    */
   showSettlement(s) {
-    const lines = [];
-    lines.push('');
-    if (s.log.length === 0) {
-      lines.push('아무것도 하지 않았다');
-    } else {
-      for (const e of s.log) {
-        const tier = e.tier ? `${e.tier} ` : '   ';
-        lines.push(`${tier}${e.label.padEnd(9, ' ')}  +${e.score}`);
-      }
-    }
-    lines.push('');
-    lines.push('─'.repeat(22));
-    lines.push(`오늘${' '.repeat(12)}+${s.todayScore}`);
-    lines.push(`누적${' '.repeat(13)}${s.total}`);
-    lines.push('');
-    lines.push(
-      s.reason === 'sleep'
-        ? `${fmt(s.sleepMinutes)} 취침 → 내일 ${fmt(wakeAfter(s.sleepMinutes))} 기상`
-        : '자정이 지났다. 아직 자지 않았다'
-    );
-    if (s.reason !== 'sleep') lines.push('00:00 부터 하루가 다시 시작된다');
-    lines.push('');
-    lines.push('[Space]');
-
     this.panelTitle.setText(`DAY ${s.day}  정산`);
-    this.panelText.setText(lines.join('\n'));
 
-    const bodyH = this.panelTitle.height + 8 + this.panelText.height;
-    const boxW = Math.max(200, this.panelText.width + 40);
-    const boxH = bodyH + 32;
+    // 들어갈 때까지 뒤에서부터 잘라낸다.
+    // 잘 산 하루는 행동이 열 개가 넘고 가설도 여럿이라 상자가 캔버스(352px)를 뚫는다 —
+    // 실제로 뚫려서 제목 줄이 화면 밖으로 나갔다. **줄 순서가 곧 우선순위다**
+    // (game/table.js가 중요한 것부터 담아 보낸다).
+    const director = [...(s.director ?? [])];
+    let boxH = 0;
+    for (;;) {
+      this.panelText.setText(this.settlementLines(s, director).join('\n'));
+      boxH = this.panelTitle.height + 8 + this.panelText.height + 32;
+      if (boxH <= H - 8 || director.length === 0) break;
+      director.pop();
+    }
+
+    const boxW = Math.min(W - 8, Math.max(200, this.panelText.width + 40));
     const bx = Math.round((W - boxW) / 2);
     const by = Math.round((H - boxH) / 2);
 
@@ -159,6 +152,40 @@ export class Overlay {
     this.panelG.setVisible(true);
     this.panelTitle.setVisible(true);
     this.panelText.setVisible(true);
+  }
+
+  /** @returns {string[]} 정산창 본문 */
+  settlementLines(s, director) {
+    const lines = [];
+    lines.push('');
+    if (s.log.length === 0) {
+      lines.push('아무것도 하지 않았다');
+    } else {
+      // 잘 산 하루는 행동이 열다섯 개도 된다. 다 적으면 상자가 화면(352px)을 넘는다
+      for (const e of s.log.slice(0, LOG_MAX)) {
+        const tier = e.tier ? `${e.tier} ` : '   ';
+        lines.push(`${tier}${e.label.padEnd(9, ' ')}  +${e.score}`);
+      }
+      if (s.log.length > LOG_MAX) lines.push(`… 외 ${s.log.length - LOG_MAX}개`);
+    }
+    lines.push('');
+    lines.push('─'.repeat(22));
+    lines.push(`오늘${' '.repeat(12)}+${s.todayScore}`);
+    lines.push(`누적${' '.repeat(13)}${s.total}`);
+    lines.push('');
+    lines.push(
+      s.reason === 'sleep'
+        ? `${fmt(s.sleepMinutes)} 취침 → 내일 ${fmt(wakeAfter(s.sleepMinutes))} 기상`
+        : '자정이 지났다. 아직 자지 않았다'
+    );
+    if (s.reason !== 'sleep') lines.push('00:00 부터 하루가 다시 시작된다');
+
+    // 디렉터가 지금 무엇을 알고 있는가. 정산을 기다리는 이 화면이 그걸 보여줄 유일한 자리다
+    if (director?.length) lines.push(...director);
+
+    lines.push('');
+    lines.push('[Space]');
+    return lines;
   }
 
   hideSettlement() {

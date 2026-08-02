@@ -11,6 +11,8 @@
 //
 // 방 사진은 저장하지 않는다. 인식 결과(오브젝트 목록)만 남는다.
 
+import { hypoLabel, ranked } from './table.js';
+
 const KEY = 'life-game/save/v1';
 
 /** 이 판을 이어가는 데 필요한 것만. 화면·스프라이트 같은 건 다시 만들면 된다. */
@@ -79,14 +81,16 @@ export function describe(s = load()) {
   if (!s) return null;
   const day = new Date(s.at);
   const when = `${day.getMonth() + 1}/${day.getDate()} ${String(day.getHours()).padStart(2, '0')}:${String(day.getMinutes()).padStart(2, '0')}`;
-  const top = (s.table?.hypotheses ?? []).slice().sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0))[0];
+  // 확정된 것이 있으면 그것부터. 이름은 정산창과 같은 함수로 만든다 —
+  // 여기가 옛 필드(`desire`)를 읽고 있어서 이어하기 줄에 undefined가 떴었다
+  const top = ranked(s.table)[0];
   return {
     when,
     day: s.day,
     total: s.total,
     collapsed: s.collapsed,
     opened: (s.told ?? []).filter((t) => t.self).length,
-    hypothesis: top ? `${top.desire} (${top.confidence})` : null,
+    hypothesis: top ? `${hypoLabel(top)} (${(top.confidence ?? 0).toFixed(2)})` : null,
   };
 }
 
