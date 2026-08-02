@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 
 import {
   Clock, fmt, wakeAfter, dayRealSeconds,
-  DAY_END, DAY1_WAKE, MS_PER_GAME_MIN,
+  DAY_END, DAY1_WAKE, MS_PER_GAME_MIN, AWAKE_SPAN,
 } from '../src/game/clock.js';
 
 const H = (h) => h * 60;
@@ -41,14 +41,15 @@ test('Day 1은 14:00 기상 · 실제 5분', () => {
   assert.equal(dayRealSeconds(DAY1_WAKE) / 60, 5);
 });
 
-test('자정에 도달하면 정확히 한 번 알린다', () => {
+test('자정은 하루를 끝내지 않는다 — 넘어가는 순간만 한 번 알린다', () => {
   const c = new Clock(H(23));            // 60 게임분 남음 = 30 실제초
   let hits = 0;
   for (let i = 0; i < 40; i++) hits += c.advance(1000) ? 1 : 0;
-  assert.equal(hits, 1);
-  assert.equal(c.minutes, DAY_END);
-  assert.equal(c.running, false);
-  assert.equal(c.label, '00:00');        // 24:00은 00:00으로 표시
+  assert.equal(hits, 1, '넘는 순간 딱 한 번');
+  assert.ok(c.minutes > DAY_END, '시계는 멈추지 않고 계속 간다');
+  assert.equal(c.running, true, '자정에 시계가 서면 안 된다');
+  assert.equal(c.pastMidnight, true);
+  assert.equal(c.label, '00:20');        // 23:00 + 40실제초(=80게임분) = 24:20 → 00:20
 });
 
 test('멈춘 시계는 흐르지 않는다', () => {
@@ -78,38 +79,35 @@ test('일찍 자면 그날은 짧고 다음 날이 길다', () => {
   assert.equal((DAY_END - c.wake) / 60, 19);  // 다음 날은 19시간
 });
 
-test('자정을 그냥 넘기면(안 잠) 00:00부터 하루가 통째로 남는다', () => {
+test('자정을 넘겨도 날짜는 그대로 — 하루는 잘 때만 넘어간다', () => {
   const c = new Clock(H(14));
-  c.nextDay(null);                       // null = 안 잤음
-  assert.equal(c.label, '00:00');
-  assert.equal((DAY_END - c.wake) / 60, 24, '24시간');
+  c.advance(11 * 60 * MS_PER_GAME_MIN);  // 25:00
+  assert.equal(c.day, 1, '안 잤으면 아직 어제다');
+  assert.equal(c.label, '01:00');
+  assert.equal(c.pastMidnight, true);
+});
+
+test('자정을 넘겨 자도 기상 시각이 맞다', () => {
+  const c = new Clock(H(14));
+  c.nextDay(H(26));                      // 새벽 2시에 잤다 (26:00)
+  assert.equal(c.label, '11:00', '02:00 + 9시간');
   assert.equal(c.day, 2);
 });
 
-test('자면 짧아지고 안 자면 길다 — 취침은 시간을 쓴다', () => {
-  const slept = new Clock(H(8));
-  slept.nextDay(H(23));
-  const awake = new Clock(H(8));
-  awake.nextDay(null);
-  assert.equal((DAY_END - slept.wake) / 60, 16);
-  assert.equal((DAY_END - awake.wake) / 60, 24);
-  assert.ok(awake.wake < slept.wake, '안 잔 쪽이 하루가 길다');
+test('취침 시각 제한이 없다 — 몇 시든 잘 수 있다', async () => {
+  const m = await import('../src/game/clock.js');
+  assert.equal(m.SLEEP_FROM, undefined, 'SLEEP_FROM은 걷어냈다');
+  assert.equal(m.SLEEP_ANYTIME, true);
+  // 기상 직후에 자면 하루가 짧아지지만 **막지 않는다.** 그건 플레이어의 선택이다
+  assert.equal(wakeAfter(H(14)), H(23), '14:00 취침 → 23:00 기상');
 });
 
-test('SLEEP_FROM 이전에는 잠들 수 없다 — 1시간짜리 하루 방지', async () => {
-  const { SLEEP_FROM } = await import('../src/game/clock.js');
-  assert.equal(SLEEP_FROM, 20 * 60);
-  // 막지 않으면: 14:00 취침 → 23:00 기상 → 하루 1시간
-  assert.equal((DAY_END - wakeAfter(H(14))) / 60, 1, '막아야 하는 이유');
-  // 허용 구간에서는 항상 4시간 이상 남는다
-  for (let m = SLEEP_FROM; m <= DAY_END; m += 30) {
-    assert.ok((DAY_END - wakeAfter(m)) / 60 >= 15, `${fmt(m)} 취침 시 하루가 너무 짧다`);
-  }
-});
-
-test('progress는 기상 0에서 자정 1로 간다', () => {
+test('progress는 깨어난 뒤 16시간을 한 칸으로 본다', () => {
   const c = new Clock(H(12));
   assert.equal(c.progress, 0);
-  c.advance(6 * 60 * MS_PER_GAME_MIN);   // 6게임시간 경과
+  c.advance(8 * 60 * MS_PER_GAME_MIN);   // 8게임시간 = 절반
   assert.equal(Math.round(c.progress * 100) / 100, 0.5);
+  c.advance(20 * 60 * MS_PER_GAME_MIN);  // 한참 넘겨도
+  assert.equal(c.progress, 1, '넘치지 않는다');
+  assert.equal(Math.round(c.awakeMinutes / 60), 28);
 });

@@ -4,6 +4,7 @@
 import { GRID_W, GRID_H } from '../room/schema.js';
 import { TILE, ROOM_TOP } from '../render/textures.js';
 import { fmt, wakeAfter } from '../game/clock.js';
+import { VITALS, LOW } from '../game/vitals.js';
 
 const W = GRID_W * TILE;                 // 384
 const H = ROOM_TOP + GRID_H * TILE;      // 352
@@ -86,6 +87,65 @@ export class Overlay {
       this.warn.width + 12, this.warn.height + 4, 0x2a1512, 0.95);
   }
 
+  // ── 상태창 ──────────────────────────────────────────────
+  //
+  // 허기 · 피로 게이지와, 만난 사람들의 호감도.
+  //
+  // 수치는 **규칙에 영향이 없다** (game/vitals.js). 이 게임은 감점이 없으므로
+  // 배가 고프다고 점수가 깎이지 않는다 — 게이지가 줄어드는 걸 보고
+  // **자러 갈 이유**를 스스로 느끼게 하는 것이 전부다.
+
+  drawStatus(vitals, affinity = []) {
+    const g = (this.statusG ??= this.scene.add.graphics().setDepth(DEPTH.hud));
+    this.statusTexts ??= [];
+    for (const t of this.statusTexts) t.destroy();
+    this.statusTexts = [];
+    g.clear();
+
+    const rows = Object.entries(VITALS);
+    const people = affinity.slice(0, 3);                 // 셋까지. 그 아래는 상태창이 방을 덮는다
+    const h = 8 + rows.length * 12 + (people.length ? 4 + people.length * 11 : 0);
+    const w = 92;
+    const x = W - w - 3;
+    const y = 26;
+
+    bevel(g, x, y, w, h);
+
+    let cy = y + 5;
+    for (const [k, def] of rows) {
+      const v = Math.round(vitals?.[k] ?? 0);
+      const low = v <= LOW;
+      this.statusTexts.push(this.scene.add.text(x + 5, cy, def.label,
+        text(this.scene, 8, low ? '#e08a7a' : '#a89882')).setDepth(DEPTH.hud + 1));
+      // 게이지는 **줄어든다.** 남은 만큼만 칠한다
+      const barX = x + 28;
+      const barW = w - 33;
+      g.fillStyle(0x0f0c0a, 1).fillRect(barX, cy + 1, barW, 6);
+      g.fillStyle(low ? 0xc25a4a : 0x8a9a6b, 1).fillRect(barX, cy + 1, Math.round(barW * v / 100), 6);
+      cy += 12;
+    }
+
+    if (!people.length) return;
+    g.fillStyle(0x3b342e, 1).fillRect(x + 4, cy, w - 8, 1);
+    cy += 3;
+    for (const p of people) {
+      this.statusTexts.push(this.scene.add.text(x + 5, cy, `${p.name}`,
+        text(this.scene, 8, '#a89882')).setDepth(DEPTH.hud + 1));
+      this.statusTexts.push(this.scene.add.text(x + w - 5, cy, `${p.value}`,
+        text(this.scene, 8, p.value >= 70 ? '#ffd447' : '#8a7c6b'))
+        .setOrigin(1, 0).setDepth(DEPTH.hud + 1));
+      cy += 11;
+    }
+  }
+
+  /** 호감도가 올랐다. 숫자만 조용히 바뀌면 아무도 못 알아챈다 */
+  popAffinity(name, to) {
+    const t = this.scene.add.text(W - 6, 16, `${name} ♥ ${to}`, {
+      ...text(this.scene, 9, '#ffd447'), stroke: '#241a0c', strokeThickness: 3,
+    }).setOrigin(1, 0).setDepth(DEPTH.pop);
+    this.pops.push({ text: t, cx: W - 6, cy: 16, age: 0, noRing: true });
+  }
+
   // ── 점수 팝업 ───────────────────────────────────────────
 
   /**
@@ -118,7 +178,7 @@ export class Overlay {
       p.text.setAlpha(k < 0.6 ? 1 : 1 - (k - 0.6) / 0.4);       // 뒤쪽 40%에서만 사라진다
 
       const rk = p.age / RING_MS;                                // 얻은 자리에서 퍼지는 링
-      if (rk < 1) {
+      if (rk < 1 && !p.noRing) {
         const spread = 1 - (1 - rk) ** 3;
         g.lineStyle(2, 0xffe27a, 1 - rk).strokeCircle(p.cx, p.cy - 6, 4 + spread * 16);
       }
@@ -196,12 +256,8 @@ export class Overlay {
     lines.push(`오늘${' '.repeat(12)}+${s.todayScore}`);
     lines.push(`누적${' '.repeat(13)}${s.total}`);
     lines.push('');
-    lines.push(
-      s.reason === 'sleep'
-        ? `${fmt(s.sleepMinutes)} 취침 → 내일 ${fmt(wakeAfter(s.sleepMinutes))} 기상`
-        : '자정이 지났다. 아직 자지 않았다'
-    );
-    if (s.reason !== 'sleep') lines.push('00:00 부터 하루가 다시 시작된다');
+    // 정산은 잔 날에만 온다 — 자정은 더 이상 하루를 끝내지 않는다 (clock.js)
+    lines.push(`${fmt(s.sleepMinutes)} 취침 → 내일 ${fmt(wakeAfter(s.sleepMinutes))} 기상`);
 
     // 디렉터가 지금 무엇을 알고 있는가. 정산을 기다리는 이 화면이 그걸 보여줄 유일한 자리다
     if (director?.length) lines.push(...director);

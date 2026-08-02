@@ -6,7 +6,9 @@ import { buildRoom } from '../room/mapper.js';
 import { MOCK_ROOMS } from '../room/mock.js';
 import { MAPS, ROOM_EXIT, returnWall, GOAL_ID, registerGoalMap, clearGoalMap } from '../game/maps.js';
 import { actionFor, potentialScore, promptLine, nameOf } from '../game/actions.js';
-import { Clock, SLEEP_FROM, fmt } from '../game/clock.js';
+import { Clock, fmt } from '../game/clock.js';
+import { residentsAt, timeBand } from '../game/residents.js';
+import { initialAffinity, raise, affinityLines, affinityOf } from '../game/affinity.js';
 import { Schedule } from '../game/schedule.js';
 import { initialVitals, tickVitals, afterSleep, vitalsLine } from '../game/vitals.js';
 import { Observer } from '../game/observer.js';
@@ -156,6 +158,8 @@ export class RoomScene extends Phaser.Scene {
     this.resetEnding();
     this.clock = new Clock();
     this.vitals = initialVitals();
+    this.affinity = initialAffinity();
+    this.npcNames = new Map();
     this.sleptLastNight = true;
     this.rebuild();
   }
@@ -256,6 +260,9 @@ export class RoomScene extends Phaser.Scene {
       this.clock.day = s.day ?? 1;
       this.clock.start(s.wake ?? 0);
       this.vitals = initialVitals();
+      // 호감도는 그날 아침으로 되돌리지 않는다 — 관계는 하루로 초기화되는 게 아니다
+      this.affinity = initialAffinity(s.affinity);
+      this.npcNames = new Map(Object.entries(s.npcNames ?? {}));
       this.rebuild();
       // 어제 쌓인 원문은 관측에 되돌려 넣는다 — 거울의 재료다
       for (const t of s.told ?? []) this.observer.told.push(t);
@@ -277,12 +284,15 @@ export class RoomScene extends Phaser.Scene {
     return this.custom ?? MOCK_ROOMS[this.roomIndex];
   }
 
-  /** 다음 날. 취침 시각이 내일 기상 시각을 정한다 (DESIGN.md §1). */
+  /**
+   * 다음 날. 취침 시각이 내일 기상 시각을 정한다 (DESIGN.md §1).
+   * **여기는 침대에서 잤을 때만 온다** — 자정은 더 이상 하루를 끝내지 않는다.
+   */
   nextDay() {
     this.overlay.hideSettlement();
-    this.sleptLastNight = this.sleepMinutes !== null;   // 자정을 그냥 넘겼으면 안 잔 것
-    if (this.sleptLastNight) this.vitals = afterSleep(this.vitals);
-    this.clock.nextDay(this.sleepMinutes);
+    this.sleptLastNight = true;
+    this.vitals = afterSleep(this.vitals);
+    this.clock.nextDay(this.sleepMinutes ?? this.clock.minutes);
     this.rebuild();
   }
 
@@ -301,6 +311,7 @@ export class RoomScene extends Phaser.Scene {
     this.phone = new Phone();       // 연락은 여기 쌓인다. 여는 것은 플레이어의 선택
     this.metProps = new Set();      // 오늘 이미 다가간 무대
     this.propNames = new Map();     // 관측 키 → 이름
+    this.doneRequests = new Set();  // 오늘 들어준 부탁. 하나는 하루 한 번
     this.buildMap();
     this.enterPlace();
     this.todayScore = 0;
@@ -410,15 +421,28 @@ export class RoomScene extends Phaser.Scene {
 
     // 골 맵의 거울은 디렉터의 무대가 아니라 그 공간 자체에 속한다. 매일 바뀌지 않는다.
     const mirror = this.mapId === GOAL_ID ? MAPS[GOAL_ID].mirror : null;
-    const scene = mirror
-      ? { props: [{ ...mirror, slot: slots[0].id, isMirror: true }] }
-      : this.sceneHere();
-    if (!scene) return;
 
-    for (const p of scene.props ?? []) {
-      const slot = slots.find((s) => s.id === p.slot);
-      if (!slot) continue;                                       // 없는 자리는 조용히 버린다
-      if (this.built.collision[slot.y][slot.x] === 1) continue;   // 가구가 이미 있으면 포기
+    let list;
+    if (mirror) {
+      list = [{ ...mirror, slot: slots[0].id, isMirror: true }];
+    } else {
+      // **붙박이가 먼저 자리를 잡고, 디렉터의 오늘 무대가 그 위에 얹힌다.**
+      // 순서가 이래야 AI가 죽어도 세상이 비지 않는다 (game/residents.js).
+      // 같은 자리를 노리면 디렉터 쪽이 진다 — 오늘만의 장면이 더 귀하다
+      const fixed = residentsAt(this.mapId, this.clock.minutes, this.clock.day);
+      const today = this.sceneHere()?.props ?? [];
+      const taken = new Set(today.map((p) => p.slot));
+      list = [...today, ...fixed.filter((r) => !taken.has(r.slot))];
+    }
+    if (!list.length) return;
+
+    for (const p of list) {
+      // 원하는 자리가 막혀 있으면 **조용히 버리지 않고 빈 자리를 찾는다.**
+      // 예전에 디렉터 프롭이 가구와 겹쳐 소리 없이 사라진 적이 있다 (PROGRESS 7/31).
+      // 좌표를 손으로 맞추는 대신 여기서 흡수한다 — 붙박이는 매일 서야 하므로
+      const free = (s) => s && this.built.collision[s.y][s.x] === 0;
+      const slot = [slots.find((s) => s.id === p.slot), ...slots].find(free);
+      if (!slot) continue;                                       // 이 공간에 설 자리가 없다
 
       const look = ['person', 'animal', 'object'].includes(p.look) ? p.look : 'object';
       const bottom = ROOM_TOP + (slot.y + 1) * TILE;
@@ -427,7 +451,9 @@ export class RoomScene extends Phaser.Scene {
       this.layer.add(sprite);
 
       this.built.collision[slot.y][slot.x] = 1;                  // 통과 불가 — 다가가야 만난다
-      const key = `${this.mapId}:prop:${p.slot}`;
+      // 자리를 옮겼을 수 있으므로 **실제로 선 자리**로 키를 만든다.
+      // 원하던 자리로 만들면 둘이 같은 키를 갖는 날이 생긴다
+      const key = `${this.mapId}:prop:${slot.id}`;
       this.propNames.set(key, p.name);                           // 관측 기록에 이름으로 남게
       this.props.push({ ...p, look, key, x: slot.x, y: slot.y, w: 1, h: 1, sprite,
         met: this.metProps.has(key) });
@@ -445,6 +471,7 @@ export class RoomScene extends Phaser.Scene {
   approachProp(p) {
     this.observer.act(p.key, `${this.placeLabel()}의 ${p.name}`, this.clock.label, 'approach');
     this.metProps.add(p.key);
+    this.talkingProp = p;         // 자유 입력의 호감도가 누구에게 가는지
     p.met = true;
 
     if (p.isMirror) { this.talkToMirror(p); return; }   // 마지막 장면은 다른 AI가 맡는다
@@ -466,10 +493,20 @@ export class RoomScene extends Phaser.Scene {
           kind: 'scene', at: this.clock.label, target: p.target ?? 'none',
           purpose: `무대 접촉 — ${p.signal ?? 'behavior'} 신호`,
           signal_wanted: [p.signal ?? 'behavior'],
-          beat: p.opening || p.detail || p.name,
+          // 붙박이 인물에게는 대사가 없다 — 여기 상황만 넘기고 **말은 매번 새로 쓰인다**.
+          // 여기에 대사를 박으면 7/31에 걷어낸 고정 NPC 구조로 돌아간다 (game/residents.js)
+          beat: p.resident
+            ? `${p.detail} ${timeBand(this.clock.minutes)}이다.`
+              + (p.request && !this.doneRequests.has(p.key) ? ` 지나가는 말로 ${p.request.text}.` : '')
+            : (p.opening || p.detail || p.name),
         },
         cast: this.cast,
-        context: { day: this.clock.day, place: this.placeLabel(), avoidance: this.table?.avoidance?.pattern },
+        context: {
+          day: this.clock.day, place: this.placeLabel(),
+          avoidance: this.table?.avoidance?.pattern,
+          // 사이가 얼마나 됐는지에 따라 말투가 달라야 한다
+          affinity: p.npc ? affinityOf(this.affinity, p.npc) : null,
+        },
       }),
     })
       .then((r) => r.json())
@@ -587,6 +624,8 @@ export class RoomScene extends Phaser.Scene {
     this.observer.tell(discloses(text, this.typedBaseline ?? 0), this.clock.label, to);
     this.dialogueLog.push({ at: this.clock.label, player: { choice: null, text, typed: true }, to });
     this.chatLog = [...(this.chatLog ?? []), { speaker: '나', text }].slice(-12);
+    // 자기 말을 직접 쓴 것은 선택지를 고른 것보다 크게 친다 (affinity.js GAIN)
+    this.raiseAffinity(this.talkingProp, 'spoke');
 
     // 내가 한 말을 먼저 보여주고, 그 사이에 답을 만든다
     this.dialogue.play(
@@ -677,7 +716,43 @@ export class RoomScene extends Phaser.Scene {
       watch: p.watch ?? null,        // 디렉터가 무엇을 보려 했는가 — 해석의 기준
     });
     this.lastAction = `${p.name} — ${choice?.text ?? '봤다'}`;
+    // 말을 섞으면 상대 쪽 문이 조금 열린다. **자기 말을 직접 쓴 쪽이 더 크다** —
+    // 남이 써준 말을 고르는 것과 자기 말을 만드는 것은 다른 일이다 (game/listening.js와 같은 근거)
+    if (choice) this.raiseAffinity(p, choice.typed ? 'spoke' : 'talk');
     this.refresh();
+  }
+
+  // ── 호감도 ──────────────────────────────────────────────
+  //
+  // **NPC가 플레이어에게** 갖는 마음이다. 상대 쪽 문이 얼마나 열렸는지를 잰다.
+
+  /** @param {'talk'|'spoke'|'favor'} kind */
+  raiseAffinity(p, kind) {
+    if (!p?.npc) return;                                   // 사물·쪽지는 마음이 없다
+    // 이름은 **안 움직여도** 적어둔다. 엄마는 100 고정이라 영영 안 움직이는데,
+    // 움직일 때만 적으면 상태창에 'mom'이라는 키가 그대로 뜬다
+    this.npcNames.set(p.npc, p.name);
+    const r = raise(this.affinity, p.npc, kind);
+    this.affinity = r.state;
+    if (!r.moved) return;                                  // 엄마는 100 고정 — 아무 일도 안 일어난다
+    this.overlay.popAffinity(p.name, r.to);
+    this.persist();
+  }
+
+  /** 그 공간에서 방금 한 행동이 누군가의 부탁이었는가 */
+  checkRequests(objectId) {
+    for (const p of this.props ?? []) {
+      if (!p.npc || !p.request || p.request.key !== objectId) continue;
+      if (this.doneRequests.has(p.key)) continue;          // 부탁 하나는 하루 한 번
+      this.doneRequests.add(p.key);
+      this.raiseAffinity(p, 'favor');
+      this.lastAction = `${p.name}의 부탁을 들어줬다`;
+    }
+  }
+
+  /** 상태창에 띄울 호감도 목록. 만난 적 있는 사람만 */
+  affinityList() {
+    return affinityLines(this.affinity, Object.fromEntries(this.npcNames ?? []));
   }
 
   // ── 관측 ────────────────────────────────────────────────
@@ -817,12 +892,15 @@ export class RoomScene extends Phaser.Scene {
     if (this.dialogue.open) return;               // 대화 중에도 시계를 세운다 — 읽는 속도가 자원이 되면 안 된다
 
     const before = this.clock.minutes;
-    if (this.clock.advance(delta * (this.timeScale ?? 1))) {   // 자정 = 하루 경계
-      this.endDay('midnight');
-      return;
+    // 자정은 이제 하루를 끝내지 않는다. **하루는 침대에서 잘 때만 끝난다.**
+    // 넘어가는 순간만 한 번 알려주고 시계는 계속 흐른다 (01:00, 02:00…)
+    if (this.clock.advance(delta * (this.timeScale ?? 1))) {
+      this.lastAction = '자정이 지났다. 아직 자지 않았다';
+      this.refresh();
     }
     this.vitals = tickVitals(this.vitals, this.clock.minutes - before);   // 표시용. 규칙엔 영향 없음
     this.overlay.drawHud(this.clock, this.todayScore, this.total, this.aiError);
+    this.overlay.drawStatus(this.vitals, this.affinityList());
 
     // 시각이 되면 **폰이 울린다.** 말풍선이 저 혼자 뜨지 않는다 —
     // 읽을지 말지가 이 게임이 재려는 신호이기 때문이다 (game/phone.js)
@@ -924,12 +1002,11 @@ export class RoomScene extends Phaser.Scene {
 
     // 행동이 없는 사물도 반환한다 — 이름은 보여줘야 하므로
     const action = actionFor(obj);
-    // 낮에는 잠이 오지 않는다. 없으면 기상 직후 취침 → 다음 날이 1시간짜리가 된다
-    const tooEarly = action?.verb === 'sleep' && this.clock.minutes < SLEEP_FROM;
+    // 취침 시각 제한은 없앴다. 몇 시든 이불만 개어져 있으면 잘 수 있다 (clock.js SLEEP_ANYTIME)
     return {
       obj, action,
       done: !!action && this.done.has(this.doneKey(action)),
-      blocked: tooEarly ? `아직 잠이 안 온다 (${fmt(SLEEP_FROM)} 이후)` : null,
+      blocked: null,
     };
   }
 
@@ -966,6 +1043,7 @@ export class RoomScene extends Phaser.Scene {
     const key = this.doneKey(t.action);
     this.observer.act(key, `${this.placeLabel()}의 ${nameOf(o)}`, this.clock.label, t.action.verb);
     this.done.add(key);
+    this.checkRequests(t.action.key);      // 이게 누군가의 부탁이었을 수 있다
     const got = this.scoreFor(t.action.score);      // 붕괴 이후엔 0
     this.todayScore += got;
     this.total += got;
@@ -1264,12 +1342,17 @@ export class RoomScene extends Phaser.Scene {
     if (this.pendingAmbient) { this.ambient = this.pendingAmbient; this.pendingAmbient = null; }
   }
 
-  /** 하루 종료 = 침대 취침 OR 게임 내 자정. 먼저 오는 것 (DESIGN.md §1). */
-  endDay(reason) {
+  /**
+   * 하루 종료 = **침대 취침뿐이다** (DESIGN.md §1).
+   *
+   * 자정 강제 종료를 걷어냈다. 그래야 "잤다"와 "안 잤다"가 갈린다 —
+   * 안 자면 시간은 계속 가지만 정산이 안 돌고, 정산이 안 돌면 내일 이벤트도 없다.
+   * 벌이 아니라 자야 할 이유다.
+   */
+  endDay(reason = 'sleep') {
     if (this.settling) return;
     this.settling = true;
-    // 자정을 그냥 넘긴 것과 침대에서 잔 것은 다르다. null = 안 잤음
-    this.sleepMinutes = reason === 'sleep' ? this.clock.minutes : null;
+    this.sleepMinutes = this.clock.minutes;
     this.clock.stop();
 
     this.cue.clear();

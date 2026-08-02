@@ -45,6 +45,9 @@ export function snapshot(scene) {
     // 거울이 그 사람을 안 닮는다 (CLAUDE.md)
     told: scene.observer?.told ?? [],
     sleptLastNight: scene.sleptLastNight !== false,
+    // 관계는 하루로 초기화되지 않는다. 이름도 같이 — 숫자만 남으면 누구였는지 모른다
+    affinity: scene.affinity ?? null,
+    npcNames: Object.fromEntries(scene.npcNames ?? []),
   };
 }
 

@@ -2,16 +2,24 @@
 
 export const GAME_MIN_PER_REAL_SEC = 2;                        // 1 실제초 = 2 게임분
 export const MS_PER_GAME_MIN = 1000 / GAME_MIN_PER_REAL_SEC;   // 게임 1분 = 500ms
-export const DAY_END = 24 * 60;      // 자정 = 강제 종료
+export const DAY_END = 24 * 60;      // 하루의 길이. 자정을 넘으면 25:00이 아니라 다음 날 01:00으로 읽는다
 export const DAY1_WAKE = 14 * 60;    // Day 1은 전날이 없으므로 14:00 고정
 export const SLEEP_TO_WAKE = 9 * 60; // 기상 = 전날 취침 + 9시간
 
 /**
- * 이 시각 전에는 잠이 오지 않는다.
- * 없으면 Day 1 기상 직후(14:00)에 자버릴 수 있는데, 그러면 기상이 23:00이라
- * 다음 날이 1시간(실제 30초)짜리가 된다. 상수를 고치는 대신 취침 조건으로 막는다.
+ * **하루는 침대에서 잘 때만 끝난다.**
+ *
+ * 예전에는 자정이 강제 종료였다. 그러면 안 자고 버틴 날도 정산이 돌아서
+ * "자는 것"과 "안 자는 것"의 차이가 흐려졌다 — 이제 자정은 그냥 지나가는 시각이고,
+ * 시계는 24:00을 넘어 계속 흐른다(표시는 01:00, 02:00…).
+ *
+ * 안 자면 점수도 안 쌓이고 정산도 안 돌아 다음 날 이벤트가 안 생긴다.
+ * 벌이 아니라 **자야 할 이유**다 (DESIGN.md §1).
  */
-export const SLEEP_FROM = 20 * 60;   // 20:00
+export const SLEEP_ANYTIME = true;
+
+/** 기준선 하루(23:00 취침 → 08:00 기상 → 16시간). 게이지 한 칸의 길이 */
+export const AWAKE_SPAN = 16 * 60;
 
 export const fmt = (minutes) => {
   const m = Math.floor(minutes);
@@ -37,25 +45,29 @@ export class Clock {
   }
 
   /**
-   * 다음 날로.
-   * @param {number|null} sleepMinutes 잤으면 취침 시각, **자정을 넘겨 안 잤으면 null**.
-   *   안 잤으면 시간이 흐르지 않았으므로 00:00부터 하루가 통째로 남는다.
+   * 다음 날로. **침대에서 잤을 때만 불린다.**
+   * @param {number} sleepMinutes 취침 시각 (자정을 넘겨 잤으면 1440보다 클 수 있다)
    */
   nextDay(sleepMinutes) {
     this.day += 1;
-    this.start(sleepMinutes === null ? 0 : wakeAfter(sleepMinutes));
+    this.start(wakeAfter(sleepMinutes));
   }
 
-  /** @returns {boolean} 이 틱에 자정에 도달했는가 */
+  /**
+   * 시간이 흐른다. **멈추는 지점이 없다** — 하루는 잘 때만 끝난다.
+   * 자정을 넘으면 minutes가 1440을 넘어가고, 표시만 01:00으로 돌아간다.
+   * @returns {boolean} 이 틱에 자정을 막 넘었는가 (연출용. 하루를 끝내지 않는다)
+   */
   advance(deltaMs) {
     if (!this.running) return false;
+    const before = this.minutes;
     this.minutes += deltaMs / MS_PER_GAME_MIN;
-    if (this.minutes >= DAY_END) {
-      this.minutes = DAY_END;
-      this.running = false;
-      return true;
-    }
-    return false;
+    return before < DAY_END && this.minutes >= DAY_END;
+  }
+
+  /** 자정을 넘겨 아직 안 잤는가 */
+  get pastMidnight() {
+    return this.minutes >= DAY_END;
   }
 
   stop() {
@@ -66,9 +78,17 @@ export class Clock {
     return fmt(this.minutes);
   }
 
-  /** 하루가 얼마나 지났는가 0~1. 시계 게이지에 쓴다. */
+  /**
+   * 깨어난 지 얼마나 됐는가 0~1. 시계 게이지에 쓴다.
+   * 자정이 더 이상 끝이 아니므로 **깨어 있는 16시간**을 한 칸으로 본다 —
+   * 다 차면 붉어지고, 넘겨도 게이지는 그대로 꽉 찬 채 시간만 간다.
+   */
   get progress() {
-    const span = DAY_END - this.wake;
-    return span > 0 ? Math.min(1, (this.minutes - this.wake) / span) : 1;
+    return Math.min(1, (this.minutes - this.wake) / AWAKE_SPAN);
+  }
+
+  /** 깨어난 뒤 흐른 게임 시간(분) */
+  get awakeMinutes() {
+    return this.minutes - this.wake;
   }
 }
