@@ -25,7 +25,13 @@ function getClient() {
     throw e;
   }
   // 정산은 호출 4건이 줄줄이 이어진다. 하나가 끊기면 하루치가 통째로 날아가므로 넉넉히.
-  client ??= new Anthropic({ maxRetries: 4, timeout: 10 * 60 * 1000 });
+  //
+  // **키는 trim해서 넘긴다.** 대시보드에 붙여넣을 때 줄바꿈이나 공백이 따라 들어가는 일이
+  // 흔한데, 그대로 보내면 401이 나고 화면에는 "키는 있음"이라고만 뜬다.
+  // 사람이 실수할 수 있는 자리는 코드가 흡수한다
+  const apiKey = (process.env.ANTHROPIC_API_KEY || '').trim() || undefined;
+  const authToken = (process.env.ANTHROPIC_AUTH_TOKEN || '').trim() || undefined;
+  client ??= new Anthropic({ apiKey, authToken, maxRetries: 4, timeout: 10 * 60 * 1000 });
   return client;
 }
 
@@ -38,6 +44,25 @@ function getClient() {
 //
 // 그래서 health는 값의 유무가 아니라 한 번 찔러본 결과를 말한다.
 // 제일 싼 모델로 1토큰. 되면 10분, 안 되면 30초 캐시 — 고치고 나서 오래 안 기다리게.
+
+/**
+ * 키의 **모양**. 값은 절대 안 나간다.
+ *
+ * "값은 들어 있는데 401"이 나면 다음 질문은 항상 같다 — 잘렸나, 공백이 붙었나, 딴 키인가.
+ * 대시보드를 눈으로 뒤지는 대신 여기서 바로 답이 나오게 한다.
+ * 정상값은 `sk-ant-` 시작 · 108자 · 앞뒤 공백 없음.
+ */
+export function keyShape() {
+  const raw = process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN || '';
+  if (!raw) return null;
+  const k = raw.trim();
+  return {
+    len: k.length,
+    prefix: k.slice(0, 7),                       // 'sk-ant-' 인가
+    padded: k.length !== raw.length,             // 앞뒤에 공백·줄바꿈이 붙었나
+    newline: /[\r\n]/.test(raw),
+  };
+}
 
 const KEY_TTL = { ok: 10 * 60 * 1000, bad: 30 * 1000 };
 const PROBE_MODEL = 'claude-haiku-4-5-20251001';

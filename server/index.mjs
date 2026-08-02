@@ -7,7 +7,7 @@ import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 
-import { hasKey, verifyKey, roomVision, checkReality, runAgent, agentList, AGENTS, MODEL } from './agents.mjs';
+import { hasKey, verifyKey, keyShape, roomVision, checkReality, runAgent, agentList, AGENTS, MODEL } from './agents.mjs';
 import { applyStatus, missing, applyVerdicts, mergeAnalysis } from './hypothesis.mjs';
 import { clearPromptCache } from './prompts.mjs';
 import { stats as cacheStats } from './cache.mjs';
@@ -428,6 +428,10 @@ createServer(async (req, res) => {
     return json(res, 200, {
       build: (process.env.RENDER_GIT_COMMIT || 'dev').slice(0, 7),
       key: k.ok, keyPresent: hasKey(), keyError: k.error,
+      // 키 자체는 절대 안 내보낸다. **모양만** 내보낸다 —
+      // 붙여넣다 잘렸는지·공백이 붙었는지를 이걸로 바로 안다.
+      // 값이 아니므로 공개돼도 잃을 게 없고, 없으면 대시보드를 눈으로 뒤져야 한다
+      keyShape: keyShape(),
       model: MODEL, agents: agentList(), cache: await cacheStats(),
     });
   }
