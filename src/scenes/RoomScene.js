@@ -854,7 +854,8 @@ export class RoomScene extends Phaser.Scene {
 
   /** 오브젝트 스프라이트를 (재)생성한다. variant로 개어진 이불·걷힌 커튼 등을 표현. */
   paint(o, variant) {
-    const t = objectTexture(this, o.type, o.w, o.h, o.onWall, o.position, variant);
+    // 공간의 결을 같이 넘긴다 — 공원의 chair는 벤치, 골목의 lamp는 가로등이 된다
+    const t = objectTexture(this, o.type, o.w, o.h, o.onWall, o.position, variant, this.theme());
     const bottom = o.onWall && o.y === 0
       ? ROOM_TOP + TILE            // 위쪽 벽면에 박힌다
       : ROOM_TOP + (o.y + o.h) * TILE;
