@@ -218,9 +218,14 @@ export class Dialogue {
     this.phase = 'choices';
     this.index = 0;
 
-    // 선택지 + 마지막 줄은 항상 '직접 말하기'.
+    // 선택지 + 마지막 줄은 '직접 말하기'.
     // 정해진 답만 있으면 하고 싶은 말을 할 수가 없다.
-    this.options = [...choices, { id: '__free', text: '직접 말하기…', free: true }];
+    //
+    // 단 **사람이 아닌 화면에는 안 붙인다** — 편의점 진열대에 대고 할 말은 없다.
+    // `free_input: false`를 준 쪽(가게·안내)만 예외다
+    this.options = this.script.free_input === false
+      ? [...choices]
+      : [...choices, { id: '__free', text: '직접 말하기…', free: true }];
 
     this.body.setText('');
     this.speaker.setText('');

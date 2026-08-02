@@ -84,6 +84,23 @@ const RESIDENTS = {
       // 밤에만. 낮에는 아예 없다
       chance: (min) => (isDaytime(min) ? 0 : 0.55),
       detail: '벤치 끝에 사람이 웅크리고 있다.',
+      // **주는 것이 곧 퀘스트다.** 대화만으로는 안 열리고, 손에 뭔가 있어야 열린다
+      wants: ['blanket', 'onigiri'],
+    },
+    {
+      npc: 'cat', name: '길고양이', look: 'animal', slot: 'c',
+      chance: () => 0.5,
+      detail: '수풀 아래에서 이쪽을 본다. 다가가면 물러선다.',
+      wants: ['catfood'],
+    },
+  ],
+  street: [
+    {
+      // 골목의 고양이는 공원 것과 다른 개체다 — 날짜 해시가 따로 굴러간다
+      npc: 'cat', name: '길고양이', look: 'animal', slot: 'a',
+      chance: (min) => (isDaytime(min) ? 0.35 : 0.7),   // 밤에 더 자주 나온다
+      detail: '담 밑에서 웅크리고 있다. 며칠은 굶은 것 같다.',
+      wants: ['catfood'],
     },
   ],
 };
@@ -127,6 +144,7 @@ function pack(r) {
     slot: r.slot,
     detail: r.detail,
     request: r.request ?? null,
+    wants: r.wants ?? null,
     resident: true,
     // 디렉터의 프롭과 같은 모양으로 맞춘다 — 씬은 둘을 구분하지 않고 그린다
     target: 'none',

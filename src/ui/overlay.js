@@ -49,9 +49,10 @@ export class Overlay {
 
   // ── 시계 HUD ────────────────────────────────────────────
 
-  drawHud(clock, todayScore, total, aiError = null) {
+  drawHud(clock, todayScore, total, aiError = null, points = null) {
     this.hudLeft.setText(`DAY ${clock.day}   ${clock.label}`);
-    this.hudRight.setText(`오늘 +${todayScore}   누적 ${total}`);
+    // 포인트는 **쓸 수 있는 것**이라 누적 점수와 나란히 둔다. 줄어드는 숫자가 하나는 보여야 한다
+    this.hudRight.setText(`오늘 +${todayScore}   누적 ${total}${points === null ? '' : `   ${points}P`}`);
 
     const g = this.hudG.clear();
     bevel(g, 2, 2, this.hudLeft.width + 8, 16);
@@ -95,7 +96,7 @@ export class Overlay {
   // 배가 고프다고 점수가 깎이지 않는다 — 게이지가 줄어드는 걸 보고
   // **자러 갈 이유**를 스스로 느끼게 하는 것이 전부다.
 
-  drawStatus(vitals, affinity = []) {
+  drawStatus(vitals, affinity = [], bag = []) {
     const g = (this.statusG ??= this.scene.add.graphics().setDepth(DEPTH.hud));
     this.statusTexts ??= [];
     for (const t of this.statusTexts) t.destroy();
@@ -104,7 +105,10 @@ export class Overlay {
 
     const rows = Object.entries(VITALS);
     const people = affinity.slice(0, 3);                 // 셋까지. 그 아래는 상태창이 방을 덮는다
-    const h = 8 + rows.length * 12 + (people.length ? 4 + people.length * 11 : 0);
+    const items = bag.slice(0, 3);
+    const h = 8 + rows.length * 12
+      + (people.length ? 4 + people.length * 11 : 0)
+      + (items.length ? 4 + items.length * 11 : 0);
     const w = 92;
     const x = W - w - 3;
     const y = 26;
@@ -125,23 +129,44 @@ export class Overlay {
       cy += 12;
     }
 
-    if (!people.length) return;
-    g.fillStyle(0x3b342e, 1).fillRect(x + 4, cy, w - 8, 1);
-    cy += 3;
-    for (const p of people) {
-      this.statusTexts.push(this.scene.add.text(x + 5, cy, `${p.name}`,
-        text(this.scene, 8, '#a89882')).setDepth(DEPTH.hud + 1));
-      this.statusTexts.push(this.scene.add.text(x + w - 5, cy, `${p.value}`,
-        text(this.scene, 8, p.value >= 70 ? '#ffd447' : '#8a7c6b'))
-        .setOrigin(1, 0).setDepth(DEPTH.hud + 1));
-      cy += 11;
+    const line = () => { g.fillStyle(0x3b342e, 1).fillRect(x + 4, cy, w - 8, 1); cy += 3; };
+
+    if (people.length) {
+      line();
+      for (const p of people) {
+        this.statusTexts.push(this.scene.add.text(x + 5, cy, `${p.name}`,
+          text(this.scene, 8, '#a89882')).setDepth(DEPTH.hud + 1));
+        this.statusTexts.push(this.scene.add.text(x + w - 5, cy, `${p.value}`,
+          text(this.scene, 8, p.value >= 70 ? '#ffd447' : '#8a7c6b'))
+          .setOrigin(1, 0).setDepth(DEPTH.hud + 1));
+        cy += 11;
+      }
+    }
+
+    // 가진 것 — 뭘 들고 있는지 모르면 누구에게 줄 수 있는지도 모른다
+    if (items.length) {
+      line();
+      for (const i of items) {
+        this.statusTexts.push(this.scene.add.text(x + 5, cy, `${i.icon} ${i.label}`,
+          text(this.scene, 8, '#9aa88c')).setDepth(DEPTH.hud + 1));
+        if (i.count > 1) {
+          this.statusTexts.push(this.scene.add.text(x + w - 5, cy, `${i.count}`,
+            text(this.scene, 8, '#8a7c6b')).setOrigin(1, 0).setDepth(DEPTH.hud + 1));
+        }
+        cy += 11;
+      }
     }
   }
 
   /** 호감도가 올랐다. 숫자만 조용히 바뀌면 아무도 못 알아챈다 */
   popAffinity(name, to) {
-    const t = this.scene.add.text(W - 6, 16, `${name} ♥ ${to}`, {
-      ...text(this.scene, 9, '#ffd447'), stroke: '#241a0c', strokeThickness: 3,
+    this.popNotice(`${name} ♥ ${to}`);
+  }
+
+  /** 화면 오른쪽 위에서 잠깐 떠올랐다 사라지는 한 줄 (포인트 소비 등) */
+  popNotice(msg, color = '#ffd447') {
+    const t = this.scene.add.text(W - 6, 16, msg, {
+      ...text(this.scene, 9, color), stroke: '#241a0c', strokeThickness: 3,
     }).setOrigin(1, 0).setDepth(DEPTH.pop);
     this.pops.push({ text: t, cx: W - 6, cy: 16, age: 0, noRing: true });
   }

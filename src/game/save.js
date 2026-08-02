@@ -46,6 +46,9 @@ export function snapshot(scene) {
     told: scene.observer?.told ?? [],
     sleptLastNight: scene.sleptLastNight !== false,
     // 관계는 하루로 초기화되지 않는다. 이름도 같이 — 숫자만 남으면 누구였는지 모른다
+    // 포인트와 가방은 날짜를 넘어 남는다 — 오늘 산 사료를 내일 줄 수 있어야 한다
+    points: scene.points ?? 0,
+    bag: scene.bag ?? {},
     affinity: scene.affinity ?? null,
     npcNames: Object.fromEntries(scene.npcNames ?? []),
   };

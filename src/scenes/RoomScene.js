@@ -9,6 +9,7 @@ import { actionFor, potentialScore, promptLine, nameOf } from '../game/actions.j
 import { Clock, fmt } from '../game/clock.js';
 import { residentsAt, timeBand } from '../game/residents.js';
 import { initialAffinity, raise, affinityLines, affinityOf } from '../game/affinity.js';
+import { ITEMS, POINT_PER_SCORE, buy, take, has, bagList, wantedFrom, itemLabel } from '../game/shop.js';
 import { Schedule } from '../game/schedule.js';
 import { initialVitals, tickVitals, afterSleep, vitalsLine } from '../game/vitals.js';
 import { Observer } from '../game/observer.js';
@@ -160,6 +161,8 @@ export class RoomScene extends Phaser.Scene {
     this.vitals = initialVitals();
     this.affinity = initialAffinity();
     this.npcNames = new Map();
+    this.points = 0;                // 쓸 수 있는 포인트. 누적 점수와 별개로 줄어든다
+    this.bag = {};                  // 산 것들
     this.sleptLastNight = true;
     this.rebuild();
   }
@@ -194,7 +197,7 @@ export class RoomScene extends Phaser.Scene {
     this.lastAction = `현실 이불 개기  +${score}`;
     this.dialogueLog.push({ at: this.clock.label, from: '현실', saw: verdict?.saw ?? '', score });
     this.overlay.popScore(this.gx * TILE + TILE / 2, ROOM_TOP + (this.gy + 1) * TILE - 6, score);
-    this.overlay.drawHud(this.clock, this.todayScore, this.total, this.aiError);
+    this.overlay.drawHud(this.clock, this.todayScore, this.total, this.aiError, this.points);
     this.refresh();
     this.persist();
 
@@ -262,6 +265,8 @@ export class RoomScene extends Phaser.Scene {
       this.vitals = initialVitals();
       // 호감도는 그날 아침으로 되돌리지 않는다 — 관계는 하루로 초기화되는 게 아니다
       this.affinity = initialAffinity(s.affinity);
+      this.points = s.points ?? 0;
+      this.bag = s.bag ?? {};
       this.npcNames = new Map(Object.entries(s.npcNames ?? {}));
       this.rebuild();
       // 어제 쌓인 원문은 관측에 되돌려 넣는다 — 거울의 재료다
@@ -312,6 +317,7 @@ export class RoomScene extends Phaser.Scene {
     this.metProps = new Set();      // 오늘 이미 다가간 무대
     this.propNames = new Map();     // 관측 키 → 이름
     this.doneRequests = new Set();  // 오늘 들어준 부탁. 하나는 하루 한 번
+    this.gaveTo = new Set();       // 오늘 뭔가 건넨 상대. 가방과 포인트는 날짜를 넘어 남는다
     this.buildMap();
     this.enterPlace();
     this.todayScore = 0;
@@ -342,7 +348,7 @@ export class RoomScene extends Phaser.Scene {
     }
     this.applySchedule();           // 정산이 이미 끝나 있으면 바로 예약
 
-    this.overlay.drawHud(this.clock, this.todayScore, this.total, this.aiError);
+    this.overlay.drawHud(this.clock, this.todayScore, this.total, this.aiError, this.points);
     this.refresh();
     this.persist();
   }
@@ -722,6 +728,102 @@ export class RoomScene extends Phaser.Scene {
     this.refresh();
   }
 
+  // ── 포인트를 쓰는 자리 ──────────────────────────────────
+  //
+  // 얻기만 하고 쓸 데가 없으면 숫자는 곧 배경이 된다.
+  // **쓰는 것 자체가 목적은 아니다** — 산 것을 누군가에게 건네는 데까지 가야
+  // 이 게임이 재려는 것(상대 쪽 문이 열리는가)에 닿는다 (game/shop.js).
+
+  /** 편의점 선반. 대화창을 그대로 쓴다 — 새 UI를 만들면 조작 규칙이 하나 더 늘어난다 */
+  openShop() {
+    const choices = Object.entries(ITEMS).map(([id, it]) => ({
+      id,
+      text: `${it.label}  ${it.price}P${this.points < it.price ? '  (모자람)' : ''}`,
+    }));
+    this.dialogue.play(
+      {
+        lines: [{ speaker: '진열대', text: `가진 포인트 ${this.points}P.` }],
+        choices: [...choices, { id: '__none', text: '그냥 본다' }],
+        free_input: false,
+      },
+      (choice) => {
+        if (!choice || choice.id === '__none' || choice.id === '__free') return;
+        const r = buy(this.points, this.bag, choice.id);
+        if (!r.ok) { this.lastAction = r.reason; this.refresh(); return; }
+        this.points = r.points;
+        this.bag = r.bag;
+        this.lastAction = `${itemLabel(choice.id)} 샀다  −${ITEMS[choice.id].price}P`;
+        this.overlay.popNotice(`−${ITEMS[choice.id].price}P`);
+        this.persist();
+        this.refresh();
+      },
+      { speaker: '진열대' },
+    );
+  }
+
+  /**
+   * 손에 든 것을 건넨다. **이게 부탁의 다른 얼굴이다** —
+   * 말로 부탁받는 것(request)과 아무 말 없이 필요해 보이는 것(wants)의 차이.
+   */
+  giveTo(p, itemId) {
+    const t = take(this.bag, itemId);
+    if (!t.ok) return;
+    this.bag = t.bag;
+    (this.gaveTo ??= new Set()).add(p.key);
+
+    this.observer.act(p.key, `${this.placeLabel()}의 ${p.name}`, this.clock.label, 'give');
+    this.dialogueLog.push({
+      at: this.clock.label, player: { choice: null, text: `${itemLabel(itemId)}를 건넸다` },
+      for_prop: p.name, place: this.placeLabel(),
+    });
+    this.lastAction = `${p.name}에게 ${itemLabel(itemId)}를 줬다`;
+    this.raiseAffinity(p, 'favor');
+    this.persist();
+    this.refresh();
+
+    // 준 다음에 무슨 일이 생기는지는 AI가 쓴다. 여기 대사를 박지 않는다
+    if (!p.met) this.approachProp(p);
+  }
+
+  /** 편의점 취식대 — 산 것을 여기서 먹는다. 살 곳과 먹을 곳이 같은 공간에 있다 */
+  openBag() {
+    const list = bagList(this.bag).filter((i) => i.eat);
+    if (!list.length) {
+      this.dialogue.play({
+        lines: [{ speaker: '취식대', text: '먹을 게 없다. 선반에서 사 와야 한다.' }],
+        choices: [], free_input: false,
+      }, () => {}, { speaker: '취식대' });
+      return;
+    }
+    this.dialogue.play(
+      {
+        lines: [{ speaker: '취식대', text: '창밖으로 골목이 보인다.' }],
+        choices: [
+          ...list.map((i) => ({ id: i.id, text: `${i.label}${i.count > 1 ? ` ×${i.count}` : ''} 먹기` })),
+          { id: '__none', text: '그만둔다' },
+        ],
+        free_input: false,
+      },
+      (choice) => { if (choice && choice.id !== '__none') this.eat(choice.id); },
+      { speaker: '취식대' },
+    );
+  }
+
+  /** 산 것을 먹는다 — 상태창 수치만 움직인다. 규칙에는 영향 없음 */
+  eat(itemId) {
+    const it = ITEMS[itemId];
+    if (!it?.eat || !has(this.bag, itemId)) return false;
+    const t = take(this.bag, itemId);
+    this.bag = t.bag;
+    this.vitals = { ...this.vitals, ...Object.fromEntries(
+      Object.entries(it.eat).map(([k, v]) => [k, Math.min(100, (this.vitals[k] ?? 0) + v)]),
+    ) };
+    this.lastAction = `${it.label}  먹었다`;
+    this.persist();
+    this.refresh();
+    return true;
+  }
+
   // ── 호감도 ──────────────────────────────────────────────
   //
   // **NPC가 플레이어에게** 갖는 마음이다. 상대 쪽 문이 얼마나 열렸는지를 잰다.
@@ -807,10 +909,21 @@ export class RoomScene extends Phaser.Scene {
    * 바라보는 대상 위에 뜨는 한 줄. **화면 라벨과 DEV 패널이 같은 걸 쓴다** —
    * 갈라지면 디버그가 거짓말을 한다.
    */
-  targetLine(o, done) {
+  /**
+   * 화면에 뜨는 한 줄.
+   *
+   * **`action`을 받는다.** 예전에는 여기서 `actionFor(obj)`를 다시 불렀는데,
+   * 그러면 `currentTarget()`이 상황에 따라 바꾼 행동(편의점 선반 → 사기)이 반영되지 않는다.
+   * 실제로 "사기"인 자리에 "보기"라고 떠서 여기서 살 수 있다는 걸 알 방법이 없었다.
+   * 라벨과 행동을 두 군데서 만들지 않는다 — 같은 실수를 세 번째 하는 중이었다.
+   */
+  targetLine(o, done, action = null) {
     if (o.type === 'door') return this.doorLine(o);
     const waiting = o.type === 'phone' ? this.phone.unread.length : 0;
     if (waiting) return `휴대폰   ${waiting}통 안 읽음   [Space] 열기`;
+    if (action && action.verb === 'look' && action.label !== '보기') {
+      return done ? `${nameOf(o)}   ✓ ${action.label}` : `${nameOf(o)}   [Space] ${action.label}`;
+    }
     return promptLine(o, done);
   }
 
@@ -900,8 +1013,8 @@ export class RoomScene extends Phaser.Scene {
       this.refresh();
     }
     this.vitals = tickVitals(this.vitals, this.clock.minutes - before);   // 표시용. 규칙엔 영향 없음
-    this.overlay.drawHud(this.clock, this.todayScore, this.total, this.aiError);
-    this.overlay.drawStatus(this.vitals, this.affinityList());
+    this.overlay.drawHud(this.clock, this.todayScore, this.total, this.aiError, this.points);
+    this.overlay.drawStatus(this.vitals, this.affinityList(), bagList(this.bag));
 
     // 시각이 되면 **폰이 울린다.** 말풍선이 저 혼자 뜨지 않는다 —
     // 읽을지 말지가 이 게임이 재려는 신호이기 때문이다 (game/phone.js)
@@ -988,6 +1101,18 @@ export class RoomScene extends Phaser.Scene {
     // 무대 프롭이 먼저다 — 오늘 놓인 것이 늘 있던 가구보다 눈에 띈다
     const prop = this.propAt(nx, ny);
     if (prop) {
+      // 손에 그 사람이 원하는 게 있으면 행동이 **주기**로 바뀐다.
+      // 침대와 같은 규칙 — 바라보는 대상의 *상태*가 행동을 정한다 (CLAUDE.md).
+      // 이미 만난 상대에게도 줄 수 있다. 말은 하루 한 번이지만 주는 건 별개다
+      const gift = prop.wants && !this.gaveTo?.has(prop.key)
+        ? wantedFrom(this.bag, prop.wants) : null;
+      if (gift) {
+        return {
+          prop, obj: prop, gift,
+          action: { key: prop.key, verb: 'give', label: `${itemLabel(gift)} 주기`, short: '주기', tier: null, score: 0 },
+          done: false, blocked: null,
+        };
+      }
       return {
         prop,
         obj: prop,
@@ -1002,7 +1127,13 @@ export class RoomScene extends Phaser.Scene {
     if (!obj) return null;
 
     // 행동이 없는 사물도 반환한다 — 이름은 보여줘야 하므로
-    const action = actionFor(obj);
+    let action = actionFor(obj);
+    // 편의점 선반·취식대는 `보기`가 아니라 **사기·먹기**라고 말해야 한다.
+    // 라벨과 실제 행동이 다르면 플레이어는 여기서 살 수 있다는 걸 영영 모른다
+    if (action?.verb === 'look' && this.mapId === 'store') {
+      if (obj.type === 'shelf') action = { ...action, label: `사기  (${this.points}P)` };
+      else if (obj.type === 'table') action = { ...action, label: '먹기' };
+    }
     // 취침 시각 제한은 없앴다. 몇 시든 이불만 개어져 있으면 잘 수 있다 (clock.js SLEEP_ANYTIME)
     return {
       obj, action,
@@ -1015,9 +1146,15 @@ export class RoomScene extends Phaser.Scene {
     const t = this.currentTarget();
     if (!t || !t.action || t.done || t.blocked) return;
 
+    if (t.gift) { this.giveTo(t.prop, t.gift); return; }   // 손에 든 걸 건넨다
     if (t.prop) {                   // 오늘의 무대에 다가간다
       this.approachProp(t.prop);
       return;
+    }
+    // 편의점 — 선반에서 사고, 취식대에서 먹는다
+    if (t.action.verb === 'look' && this.mapId === 'store') {
+      if (t.obj.type === 'shelf') { this.openShop(); return; }
+      if (t.obj.type === 'table') { this.openBag(); return; }
     }
 
     // 이동과 취침은 점수 행동이 아니다 — 하루 1회 규칙(done)에 넣지 않는다.
@@ -1048,6 +1185,8 @@ export class RoomScene extends Phaser.Scene {
     const got = this.scoreFor(t.action.score);      // 붕괴 이후엔 0
     this.todayScore += got;
     this.total += got;
+    // 점수와 **같이** 포인트가 들어온다. 점수는 기록으로 남고 포인트는 쓰면 준다 (game/shop.js)
+    this.points += got * POINT_PER_SCORE;
     this.todayLog.push({ label: t.action.label, tier: t.action.tier, score: got });
     this.lastAction = `${t.action.label}  +${got}`;
 
@@ -1163,7 +1302,7 @@ export class RoomScene extends Phaser.Scene {
     }
 
     this.enterPlace();
-    this.overlay.drawHud(this.clock, this.todayScore, this.total, this.aiError);
+    this.overlay.drawHud(this.clock, this.todayScore, this.total, this.aiError, this.points);
     this.refresh();
   }
 
@@ -1359,7 +1498,7 @@ export class RoomScene extends Phaser.Scene {
     this.cue.clear();
     this.label.setVisible(false);
     this.labelBox.setVisible(false);
-    this.overlay.drawHud(this.clock, this.todayScore, this.total, this.aiError);   // 멈추기 전 마지막 값
+    this.overlay.drawHud(this.clock, this.todayScore, this.total, this.aiError, this.points);   // 멈추기 전 마지막 값
 
     // 이력을 먼저 챙기고(오늘 재생된 이벤트) 정산을 쏜다
     if (this.schedule) this.history = [...this.history, ...this.schedule.toHistory(this.clock.day)].slice(-8);
@@ -1483,7 +1622,7 @@ export class RoomScene extends Phaser.Scene {
 
     // 라벨은 플레이어와 대상 중 위쪽에 맞춘다 — 캐릭터를 가리지 않게
     const playerTop = ROOM_TOP + (this.gy + 1) * TILE - TILE * 1.5;
-    const line = this.targetLine(o, t.done);
+    const line = this.targetLine(o, t.done, t.action);
     this.drawLabel(line, cx, Math.min(top, playerTop) - 6);
   }
 
@@ -1554,7 +1693,7 @@ export class RoomScene extends Phaser.Scene {
       : !t.action
         ? `${promptLine(t.obj, false)}  (행동 없음)`
         : t.obj.type === 'door' || t.obj.type === 'phone'
-          ? this.targetLine(t.obj, t.done)
+          ? this.targetLine(t.obj, t.done, t.action)
         : t.done
           ? `${t.action.label}  (오늘 이미 함)`
           : `[Space] ${t.action.label}${t.action.score ? `  ${t.action.tier} +${t.action.score}` : ''}`;

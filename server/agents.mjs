@@ -303,7 +303,11 @@ const REPLY_SCHEMA = obj({
 // ── 레지스트리 ──────────────────────────────────────────────
 
 /**
- * effort — 분석은 높게(일관성), 집필은 중간(속도). DESIGN.md §5 호출 목록과 1:1.
+ * effort — 분석은 높게(일관성), **실시간 대사는 낮게(속도)**. DESIGN.md §5 호출 목록과 1:1.
+ *
+ * realtime: true — 플레이어가 화면 앞에서 기다리는 호출. fast 모드로 나간다.
+ * claude-opus-5는 thinking을 생략하면 **기본이 켜짐**이라(4.8에서 바뀐 점) 대사 네 줄에도
+ * 추론이 돌아 10~20초가 걸렸다. effort를 low로 낮추는 게 가장 큰 레버다.
  * vars   — prompts/*.md의 User Message 안 {{키}}를 채운다.
  */
 export const AGENTS = {
@@ -334,7 +338,7 @@ export const AGENTS = {
   },
   writer: {
     role: '집필 — 편성 1건을 실제 대사와 선택지로 만든다',
-    prompt: 'writer', schema: SCRIPT_SCHEMA, effort: 'medium', maxTokens: 4000,
+    prompt: 'writer', schema: SCRIPT_SCHEMA, effort: 'low', maxTokens: 4000, realtime: true,
     vars: ['event', 'cast', 'context'],
   },
   'goal-map': {
@@ -344,7 +348,7 @@ export const AGENTS = {
   },
   mirror: {
     role: '거울 — 골 맵의 인물이 플레이어와 나누는 마지막 대화 (실시간)',
-    prompt: 'mirror', schema: MIRROR_SCHEMA, effort: 'medium', maxTokens: 3000,
+    prompt: 'mirror', schema: MIRROR_SCHEMA, effort: 'medium', maxTokens: 3000, realtime: true,
     vars: ['mirror', 'turn', 'history', 'message'],
   },
   reality: {
@@ -354,7 +358,7 @@ export const AGENTS = {
   },
   'npc-reply': {
     role: '이어가기 — 플레이어가 직접 쓴 말에 NPC가 답한다 (실시간)',
-    prompt: 'npc-reply', schema: REPLY_SCHEMA, effort: 'medium', maxTokens: 2000,
+    prompt: 'npc-reply', schema: REPLY_SCHEMA, effort: 'low', maxTokens: 2000, realtime: true,
     vars: ['npc', 'context', 'history', 'message'],
   },
 };
@@ -378,11 +382,17 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * 연결 끊김(status 없음)은 SDK 재시도를 넘겨도 가끔 나므로 여기서 한 겹 더 잡는다 —
  * 정산은 호출 4건이 이어져 있어 한 건만 실패해도 하루가 통째로 사라진다.
  */
-async function call(params, attempt = 0) {
+async function call(params, attempt = 0, fast = false) {
   const c = getClient();
+  const betas = ['server-side-fallback-2026-07-01'];
+  // 실시간 대사는 **속도가 곧 품질**이다 — 다가갔는데 10초를 기다리면 그게 게임의 인상이 된다.
+  // fast 모드는 같은 모델을 더 빨리 뱉게 한다(값은 두 배지만 대사는 출력이 1천 토큰대다)
+  if (fast) betas.push('fast-mode-2026-02-01');
   try {
     return await c.beta.messages.create({
-      ...params, betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default',
+      ...params,
+      ...(fast ? { speed: 'fast' } : {}),
+      betas, fallbacks: 'default',
     });
   } catch (err) {
     if (err?.status === 400) {
@@ -471,7 +481,7 @@ export async function runAgent(name, vars = {}, extra = {}) {
     system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }],
     messages: [{ role: 'user', content }],
     output_config: { effort: agent.effort, format: { type: 'json_schema', schema: agent.schema } },
-  });
+  }, 0, !!agent.realtime);
 
   const out = {
     data: readJson(res),
