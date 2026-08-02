@@ -7,7 +7,7 @@ import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 
-import { hasKey, roomVision, checkReality, runAgent, agentList, AGENTS, MODEL } from './agents.mjs';
+import { hasKey, verifyKey, roomVision, checkReality, runAgent, agentList, AGENTS, MODEL } from './agents.mjs';
 import { applyStatus, missing, applyVerdicts, mergeAnalysis } from './hypothesis.mjs';
 import { clearPromptCache } from './prompts.mjs';
 import { stats as cacheStats } from './cache.mjs';
@@ -422,9 +422,13 @@ createServer(async (req, res) => {
     // build — 배포본이 어느 커밋인지. 이게 없으면 "고쳤는데 안 된다"가 코드 문제인지
     // 배포가 아직 안 온 건지 구분할 방법이 없다 (실제로 한참 헤맸다).
     // Render가 넣어주는 값이고, 로컬에서는 'dev'.
+    // key — **값이 있는지가 아니라 실제로 되는지.** 값이 들어 있는 채로 401을 받으면
+    // 게임은 아무 말 없이 이벤트가 0건이 된다. 나흘 동안 그랬다 (agents.mjs verifyKey)
+    const k = await verifyKey();
     return json(res, 200, {
       build: (process.env.RENDER_GIT_COMMIT || 'dev').slice(0, 7),
-      key: hasKey(), model: MODEL, agents: agentList(), cache: await cacheStats(),
+      key: k.ok, keyPresent: hasKey(), keyError: k.error,
+      model: MODEL, agents: agentList(), cache: await cacheStats(),
     });
   }
   if (url === '/api/room-vision' && req.method === 'POST') {

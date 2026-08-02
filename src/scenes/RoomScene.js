@@ -190,7 +190,7 @@ export class RoomScene extends Phaser.Scene {
     this.lastAction = `현실 이불 개기  +${score}`;
     this.dialogueLog.push({ at: this.clock.label, from: '현실', saw: verdict?.saw ?? '', score });
     this.overlay.popScore(this.gx * TILE + TILE / 2, ROOM_TOP + (this.gy + 1) * TILE - 6, score);
-    this.overlay.drawHud(this.clock, this.todayScore, this.total);
+    this.overlay.drawHud(this.clock, this.todayScore, this.total, this.aiError);
     this.refresh();
     this.persist();
 
@@ -219,6 +219,7 @@ export class RoomScene extends Phaser.Scene {
     this.mirrorLog = [];
     this.goal = null;
     this.plan = null;
+    this.aiError = null;
     this.table = { hypotheses: [], avoidance: { pattern: '', evidence: [] } };
   }
 
@@ -330,7 +331,7 @@ export class RoomScene extends Phaser.Scene {
     }
     this.applySchedule();           // 정산이 이미 끝나 있으면 바로 예약
 
-    this.overlay.drawHud(this.clock, this.todayScore, this.total);
+    this.overlay.drawHud(this.clock, this.todayScore, this.total, this.aiError);
     this.refresh();
     this.persist();
   }
@@ -821,7 +822,7 @@ export class RoomScene extends Phaser.Scene {
       return;
     }
     this.vitals = tickVitals(this.vitals, this.clock.minutes - before);   // 표시용. 규칙엔 영향 없음
-    this.overlay.drawHud(this.clock, this.todayScore, this.total);
+    this.overlay.drawHud(this.clock, this.todayScore, this.total, this.aiError);
 
     // 시각이 되면 **폰이 울린다.** 말풍선이 저 혼자 뜨지 않는다 —
     // 읽을지 말지가 이 게임이 재려는 신호이기 때문이다 (game/phone.js)
@@ -1083,7 +1084,7 @@ export class RoomScene extends Phaser.Scene {
     }
 
     this.enterPlace();
-    this.overlay.drawHud(this.clock, this.todayScore, this.total);
+    this.overlay.drawHud(this.clock, this.todayScore, this.total, this.aiError);
     this.refresh();
   }
 
@@ -1175,15 +1176,24 @@ export class RoomScene extends Phaser.Scene {
 
     this.job('/api/opening', { world: this.world, cast: this.cast, places: this.placesForDirector() })
       .then((out) => {
-        if (out.error || this.clock.day !== 1) return;       // 늦게 왔으면 그냥 버린다
+        if (out.error) throw new Error(out.error);
+        if (this.clock.day !== 1) return;                    // 늦게 왔으면 그냥 버린다
         this.plan = out.plan;
         this.pendingScripts = out.scripts ?? [];
         this.pendingAmbient = ambientOverrides(out.plan?.ambient);
         this.applySchedule();
         this.buildMap();                                     // 오늘의 프롭을 지금 세운다
+        this.aiError = null;
         this.refresh();
       })
-      .catch((e) => console.warn('[opening]', e.message));
+      .catch((e) => {
+        console.warn('[opening]', e.message);
+        // **조용히 넘어가지 않는다.** 여기가 실패하면 1일차에 무대도 이벤트도 0건인데,
+        // 예전에는 console에만 적혀서 플레이어는 그냥 "아무 일도 안 일어나는 게임"을 본다.
+        // 실제로 배포본 키가 죽은 채 나흘이 흘렀다
+        this.aiError = e.message;
+        this.refresh();
+      });
   }
 
   /** 하루가 끝나면 정산 파이프라인을 발사한다. **기다리지 않는다** (DESIGN.md §5). */
@@ -1229,6 +1239,7 @@ export class RoomScene extends Phaser.Scene {
         }
         this.applySchedule();          // 이미 다음 날이면 즉시 반영
         this.settlePending = false;
+        this.aiError = null;
         this.drawSettlement();         // 아직 정산창을 보고 있다면 그 자리에서 갱신된다
         this.refresh();
         this.persist();
@@ -1237,6 +1248,7 @@ export class RoomScene extends Phaser.Scene {
       .catch((e) => {
         console.warn('[settle]', e.message);
         this.settleError = e.message;
+        this.aiError = e.message;
         this.settlePending = false;
         this.drawSettlement();         // 실패도 화면에 적는다. 조용히 실패하면 안 된다
         this.refresh();
@@ -1263,7 +1275,7 @@ export class RoomScene extends Phaser.Scene {
     this.cue.clear();
     this.label.setVisible(false);
     this.labelBox.setVisible(false);
-    this.overlay.drawHud(this.clock, this.todayScore, this.total);   // 멈추기 전 마지막 값
+    this.overlay.drawHud(this.clock, this.todayScore, this.total, this.aiError);   // 멈추기 전 마지막 값
 
     // 이력을 먼저 챙기고(오늘 재생된 이벤트) 정산을 쏜다
     if (this.schedule) this.history = [...this.history, ...this.schedule.toHistory(this.clock.day)].slice(-8);
@@ -1481,7 +1493,8 @@ export class RoomScene extends Phaser.Scene {
         collapsed: this.collapsed, collapseNext: this.collapseNext,
         collapsedOn: this.collapsedOn, day: this.clock.day,
       }) + (this.settleUsage ? `   정산비용 in=${this.settleUsage.input} out=${this.settleUsage.output}` : ''),
-      this.settleError ? `정산실패 ${this.settleError}` : '',
+      this.aiError ? `⚠ AI   ${this.aiError}` : '',
+      this.settleError && this.settleError !== this.aiError ? `정산실패 ${this.settleError}` : '',
       this.world
         ? `세계   ${this.world.age}세 · ${this.world.situation}\n       압력: ${this.world.pressure}\n       인물: ${this.cast.map((c) => `${c.name}(${c.presence})`).join(', ')}\n       간극: ${this.gapNote ?? '—'}`
         : (this.survey ? '세계   캐스팅 중…' : ''),

@@ -48,7 +48,7 @@ export class Overlay {
 
   // ── 시계 HUD ────────────────────────────────────────────
 
-  drawHud(clock, todayScore, total) {
+  drawHud(clock, todayScore, total, aiError = null) {
     this.hudLeft.setText(`DAY ${clock.day}   ${clock.label}`);
     this.hudRight.setText(`오늘 +${todayScore}   누적 ${total}`);
 
@@ -61,6 +61,29 @@ export class Overlay {
     g.fillStyle(0x0f0c0a, 0.9).fillRect(3, 20, barW, 2);
     g.fillStyle(clock.progress > 0.85 ? 0xc25a4a : 0x8a7c6b, 1)
       .fillRect(3, 20, Math.round(barW * clock.progress), 2);
+
+    this.drawAiWarning(aiError);
+  }
+
+  /**
+   * AI 호출이 죽어 있으면 화면에 적는다.
+   *
+   * 이게 없어서 배포본 키가 401인 채로 나흘이 지났다 — 이벤트도 NPC도 가설도 0건인데
+   * 화면에는 아무 표시가 없어서 **게임이 원래 그런 줄 알게 된다.**
+   * 실패는 console이 아니라 보는 자리에 적혀야 한다.
+   */
+  drawAiWarning(msg) {
+    if (!msg) { this.warn?.setVisible(false); this.warnG?.clear(); return; }
+
+    this.warnG ??= this.scene.add.graphics().setDepth(DEPTH.hud);
+    this.warn ??= this.scene.add.text(W / 2, 26, '', {
+      ...text(this.scene, 9, '#ffb4a2'), align: 'center',
+    }).setOrigin(0.5, 0).setDepth(DEPTH.hud + 1);
+
+    this.warn.setText('⚠ AI 연결 실패 — 이벤트가 생성되지 않는다').setVisible(true);
+    this.warnG.clear();
+    bevel(this.warnG, Math.round((W - this.warn.width - 12) / 2), 24,
+      this.warn.width + 12, this.warn.height + 4, 0x2a1512, 0.95);
   }
 
   // ── 점수 팝업 ───────────────────────────────────────────

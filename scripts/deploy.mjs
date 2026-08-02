@@ -58,6 +58,23 @@ while (Date.now() - started < LIMIT_MS) {
 
   if (live === head) {
     console.log(`\n✅ ${head} 떠 있다  (${Math.round((Date.now() - started) / 1000)}초)`);
+
+    // 떠 있다고 도는 건 아니다. **키가 실제로 되는지까지 본다** —
+    // 값이 들어 있는 채로 401을 받으면 게임은 아무 말 없이 이벤트가 0건이 되고,
+    // 그 상태로 나흘을 플레이했다. 배포는 성공인데 게임은 죽은 상태였다.
+    try {
+      const h = await (await fetch(`${APP}/api/health`, { signal: AbortSignal.timeout(30000) })).json();
+      if (h.key) {
+        console.log(`✅ Claude API 키 정상 (${h.model})`);
+      } else {
+        console.error(`\n❌ 배포는 됐지만 **AI가 안 돈다** — 이벤트·NPC·가설이 전부 0건이 된다`);
+        console.error(`   ${h.keyPresent ? `키 값은 있는데 안 먹는다: ${h.keyError}` : '키가 아예 없다'}`);
+        console.error(`   Render 대시보드 → Environment → ANTHROPIC_API_KEY 를 확인할 것`);
+        process.exit(1);
+      }
+    } catch (e) {
+      console.warn(`⚠ 키 확인 실패 (${e.message}) — 직접 /api/health 를 볼 것`);
+    }
     process.exit(0);
   }
   process.stdout.write('.');

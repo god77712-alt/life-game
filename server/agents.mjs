@@ -29,6 +29,37 @@ function getClient() {
   return client;
 }
 
+// ── 키가 **진짜** 되는가 ─────────────────────────────────────
+//
+// `hasKey()`는 환경변수가 있는지만 본다. 그런데 배포본에 값이 들어 있으면서
+// 401을 받는 일이 실제로 있었다 — 그 상태로 나흘을 플레이했고, 그동안
+// 1일차 무대도 매일 밤 정산도 전부 조용히 실패했다. **있다는 것과 된다는 것은 다르다.**
+// (8/1에 "밀었다는 것과 떠 있다는 것은 다르다"로 한 번 겪은 것과 같은 모양이다.)
+//
+// 그래서 health는 값의 유무가 아니라 한 번 찔러본 결과를 말한다.
+// 제일 싼 모델로 1토큰. 되면 10분, 안 되면 30초 캐시 — 고치고 나서 오래 안 기다리게.
+
+const KEY_TTL = { ok: 10 * 60 * 1000, bad: 30 * 1000 };
+const PROBE_MODEL = 'claude-haiku-4-5-20251001';
+let keyCheck = null;
+
+export async function verifyKey() {
+  if (!hasKey()) return { ok: false, error: 'ANTHROPIC_API_KEY가 없다' };
+  if (keyCheck && Date.now() - keyCheck.at < KEY_TTL[keyCheck.ok ? 'ok' : 'bad']) return keyCheck;
+
+  try {
+    await getClient().messages.create({
+      model: PROBE_MODEL, max_tokens: 1, messages: [{ role: 'user', content: '.' }],
+    });
+    keyCheck = { at: Date.now(), ok: true, error: null };
+  } catch (err) {
+    // 키 자체가 틀린 것과 잠깐 못 붙는 것을 구분해서 적는다
+    const status = err.status ?? err.code ?? '';
+    keyCheck = { at: Date.now(), ok: false, error: `${status} ${err.message ?? err}`.trim().slice(0, 200) };
+  }
+  return keyCheck;
+}
+
 // ── 스키마 ──────────────────────────────────────────────────
 
 const str = (enumList) => (enumList ? { type: 'string', enum: enumList } : { type: 'string' });
