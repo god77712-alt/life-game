@@ -218,12 +218,15 @@ export class Dialogue {
     this.phase = 'choices';
     this.index = 0;
 
-    // 선택지 + 마지막 줄은 '직접 말하기'.
-    // 정해진 답만 있으면 하고 싶은 말을 할 수가 없다.
+    // 선택지 + 마지막 줄은 **항상** '직접 말하기'.
+    // 정해진 답만 있으면 하고 싶은 말을 할 수가 없고, 자유 입력 원문은
+    // 이 게임이 유일하게 모으려는 자산이다 (CLAUDE.md).
     //
-    // 단 **사람이 아닌 화면에는 안 붙인다** — 편의점 진열대에 대고 할 말은 없다.
-    // `free_input: false`를 준 쪽(가게·안내)만 예외다
-    this.options = this.script.free_input === false
+    // ⚠️ `free_input`으로 판단하지 않는다. 그건 writer 스키마의 필드로
+    // **"이 장면이 결정적인가"**를 뜻하고, writer는 결정적 장면에만 true를 낸다.
+    // 그걸 "직접말하기 숨김"으로 읽었더니 **모든 NPC 대화에서 입력창이 사라졌다.**
+    // 가게·안내처럼 사람이 아닌 화면만 `allowFree: false`로 직접 끈다.
+    this.options = this.script.allowFree === false
       ? [...choices]
       : [...choices, { id: '__free', text: '직접 말하기…', free: true }];
 

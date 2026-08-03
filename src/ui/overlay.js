@@ -90,13 +90,16 @@ export class Overlay {
 
   // ── 상태창 ──────────────────────────────────────────────
   //
-  // 허기 · 피로 게이지와, 만난 사람들의 호감도.
+  // 허기 · 피로 게이지와 가진 것.
+  //
+  // **호감도는 여기 없다.** 그건 그 사람 머리 위에 뜬다 — 목록으로 모아두면
+  // 채워야 할 게이지처럼 보이고, 그러면 사람이 아니라 숫자를 보게 된다.
   //
   // 수치는 **규칙에 영향이 없다** (game/vitals.js). 이 게임은 감점이 없으므로
   // 배가 고프다고 점수가 깎이지 않는다 — 게이지가 줄어드는 걸 보고
   // **자러 갈 이유**를 스스로 느끼게 하는 것이 전부다.
 
-  drawStatus(vitals, affinity = [], bag = []) {
+  drawStatus(vitals, bag = []) {
     const g = (this.statusG ??= this.scene.add.graphics().setDepth(DEPTH.hud));
     this.statusTexts ??= [];
     for (const t of this.statusTexts) t.destroy();
@@ -104,11 +107,8 @@ export class Overlay {
     g.clear();
 
     const rows = Object.entries(VITALS);
-    const people = affinity.slice(0, 3);                 // 셋까지. 그 아래는 상태창이 방을 덮는다
     const items = bag.slice(0, 3);
-    const h = 8 + rows.length * 12
-      + (people.length ? 4 + people.length * 11 : 0)
-      + (items.length ? 4 + items.length * 11 : 0);
+    const h = 8 + rows.length * 12 + (items.length ? 4 + items.length * 11 : 0);
     const w = 92;
     const x = W - w - 3;
     const y = 26;
@@ -130,18 +130,6 @@ export class Overlay {
     }
 
     const line = () => { g.fillStyle(0x3b342e, 1).fillRect(x + 4, cy, w - 8, 1); cy += 3; };
-
-    if (people.length) {
-      line();
-      for (const p of people) {
-        this.statusTexts.push(this.scene.add.text(x + 5, cy, `${p.name}`,
-          text(this.scene, 8, '#a89882')).setDepth(DEPTH.hud + 1));
-        this.statusTexts.push(this.scene.add.text(x + w - 5, cy, `${p.value}`,
-          text(this.scene, 8, p.value >= 70 ? '#ffd447' : '#8a7c6b'))
-          .setOrigin(1, 0).setDepth(DEPTH.hud + 1));
-        cy += 11;
-      }
-    }
 
     // 가진 것 — 뭘 들고 있는지 모르면 누구에게 줄 수 있는지도 모른다
     if (items.length) {

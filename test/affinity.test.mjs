@@ -35,12 +35,22 @@ test('처음 만나는 사람은 시작값', () => {
   assert.equal(affinityOf({}, null), null);
 });
 
-test('대화하면 오르고, 자기 말을 쓰면 더 오른다', () => {
-  const talk = raise(initialAffinity(), 'friend', 'talk');
+test('**말을 섞은 것만으로는 안 오른다**', () => {
+  // 다가가서 선택지를 하나 누른 건 남이 써준 말을 고른 것이다.
+  // 그걸로 오르면 NPC를 한 바퀴 돌며 아무거나 눌러 채울 수 있고,
+  // 그 순간 이 숫자는 아무것도 안 재는 숫자가 된다
+  assert.equal('talk' in GAIN, false, '단순 대화 이득이 있으면 안 된다');
+  assert.equal(raise(initialAffinity(), 'friend', 'talk').moved, false);
+});
+
+test('자기 말을 직접 쓰면 오른다', () => {
   const spoke = raise(initialAffinity(), 'friend', 'spoke');
-  assert.equal(talk.to, START + GAIN.talk);
   assert.equal(spoke.to, START + GAIN.spoke);
-  assert.ok(spoke.to > talk.to, '남이 써준 말을 고르는 것과 자기 말을 만드는 것은 다르다');
+  assert.equal(spoke.moved, true);
+});
+
+test('오르는 길은 둘뿐이다 — 자기 말과 실제로 해준 것', () => {
+  assert.deepEqual(Object.keys(GAIN).sort(), ['favor', 'spoke']);
 });
 
 test('부탁을 들어주면 대화보다 훨씬 크게 오른다', () => {

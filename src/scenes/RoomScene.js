@@ -460,6 +460,20 @@ export class RoomScene extends Phaser.Scene {
         .setOrigin(0, 1).setDepth(bottom + 1);
       this.layer.add(sprite);
 
+      // 호감도는 **그 사람 머리 위에만** 뜬다. 상태창에 목록으로 모아두면
+      // 채워야 할 게이지처럼 보이고, 그러면 사람이 아니라 숫자를 보게 된다
+      if (p.npc) {
+        const v = affinityOf(this.affinity, p.npc);
+        const heart = this.add.text(slot.x * TILE + TILE / 2, bottom - TILE * 1.5 - 3,
+          `♥ ${v}`, {
+            fontFamily: 'monospace', fontSize: '8px', resolution: 1,
+            color: v >= 70 ? '#ffd447' : v >= 45 ? '#c9b799' : '#8a7c6b',
+            stroke: '#1a1714', strokeThickness: 3,
+          }).setOrigin(0.5, 1).setDepth(bottom + 2);
+        this.layer.add(heart);
+        p.heart = heart;
+      }
+
       this.built.collision[slot.y][slot.x] = 1;                  // 통과 불가 — 다가가야 만난다
       // 자리를 옮겼을 수 있으므로 **실제로 선 자리**로 키를 만든다.
       // 원하던 자리로 만들면 둘이 같은 키를 갖는 날이 생긴다
@@ -482,6 +496,9 @@ export class RoomScene extends Phaser.Scene {
     this.observer.act(p.key, `${this.placeLabel()}의 ${p.name}`, this.clock.label, 'approach');
     this.metProps.add(p.key);
     this.talkingProp = p;         // 자유 입력의 호감도가 누구에게 가는지
+    // **여기서 상대가 정해진다.** 이후 대사 텍스트로 안 바꾼다.
+    // kind는 어느 AI가 답할지도 정한다 — 거울은 mirror, 나머지는 npc-reply
+    this.beginTalk(p, p.isMirror ? 'mirror' : 'prop');
     // 오늘 이 사람이 부탁할 게 있으면 여기서 듣는다. **듣기 전에는 완료되지 않는다**
     const errand = this.hearErrands(p.npc);
     p.met = true;
@@ -633,7 +650,18 @@ export class RoomScene extends Phaser.Scene {
    * 그 다음 상대가 답하고, 대화가 이어진다.
    */
   sayFreely(text) {
-    const to = this.dialogue.script?.lines?.[0]?.speaker ?? this.talkingTo ?? null;
+    // 거울은 전용 AI가 맡는다. 여기서 npc-reply로 새면 마지막 장면이 통째로 어긋난다
+    if (this.talkingWith?.kind === 'mirror' && this.talkingProp) {
+      this.mirrorLog = [...(this.mirrorLog ?? []), { speaker: '나', text }];
+      this.dialogueLog.push({ at: this.clock.label, from: '거울', player: { choice: null, text, typed: true } });
+      this.observer.tell(discloses(text, this.typedBaseline ?? 0), this.clock.label, this.partnerName);
+      this.talkToMirror(this.talkingProp, text);
+      return;
+    }
+
+    // **상대는 다가간 순간 정해졌다.** 대사 첫 줄의 화자에서 다시 읽으면
+    // writer가 쓴 이름에 따라 상대가 바뀐다 — 노숙자와 얘기하다 친구가 답했다
+    const to = this.partnerName;
 
     this.observer.tell(discloses(text, this.typedBaseline ?? 0), this.clock.label, to);
     this.dialogueLog.push({ at: this.clock.label, player: { choice: null, text, typed: true }, to });
@@ -658,7 +686,7 @@ export class RoomScene extends Phaser.Scene {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        npc: this.castOf(to),
+        npc: this.partnerOf(),
         context: { day: this.clock.day, at: this.clock.label, place: this.placeLabel() },
         history: this.chatLog,
         message: text,
@@ -692,6 +720,53 @@ export class RoomScene extends Phaser.Scene {
       ?? { name: name ?? '상대', relation: '지금 말을 섞고 있는 사람', tone: '평범하다' };
   }
 
+  // ── 지금 누구와 말하고 있는가 ───────────────────────────
+  //
+  // **한 번 정해지면 대화가 끝날 때까지 안 바뀐다.**
+  //
+  // 예전에는 매 턴 `script.lines[0].speaker`에서 다시 읽었다. 그런데 그 이름은
+  // writer가 매번 새로 쓰는 문자열이라, 공원에서 노숙자와 얘기하는 중에
+  // writer가 첫 줄 화자를 '지훈'으로 적으면 **그다음부터 지훈이 답했다.**
+  // 상대는 텍스트에서 유도할 게 아니라 다가간 순간 못 박아야 하는 값이다.
+
+  /** @param {{npc?:string|null, name:string}} who @param {'prop'|'phone'|'mirror'} kind */
+  beginTalk(who, kind = 'prop') {
+    this.talkingWith = { npc: who?.npc ?? null, name: who?.name ?? '상대', kind };
+    return this.talkingWith;
+  }
+
+  endTalk() {
+    this.talkingWith = null;
+  }
+
+  /** 지금 상대의 이름. 대화 중이 아니면 null */
+  get partnerName() {
+    return this.talkingWith?.name ?? null;
+  }
+
+  /**
+   * npc-reply에 넘길 상대. **cast에 없는 사람도 제대로 넘어가야 한다** —
+   * 노숙자·길고양이·오늘의 프롭은 캐스팅 목록에 없고, 이름만 넘기면
+   * 모델이 아는 사람(친구·엄마) 중 하나로 흘러간다.
+   */
+  partnerOf() {
+    const w = this.talkingWith;
+    if (!w) return this.castOf(null);
+    const known = (this.cast ?? []).find((c) => c.name === w.name);
+    if (known) return { ...known, situation: this.situationOf(w.name) };
+    return {
+      name: w.name,
+      relation: w.npc === 'cat' ? '길에서 마주친 동물' : '오늘 이 자리에서 마주친 사람',
+      tone: '이 사람으로만 답해라. 다른 등장인물의 이름이나 말투를 빌리지 마라',
+      situation: this.situationOf(w.name),
+    };
+  }
+
+  /** 디렉터가 적어둔 그 인물의 지금 처지 (plan.cast_state) */
+  situationOf(name) {
+    return (this.plan?.cast_state ?? []).find((c) => c.name === name)?.situation ?? null;
+  }
+
   // ── 휴대폰 ──────────────────────────────────────────────
 
   /**
@@ -712,7 +787,7 @@ export class RoomScene extends Phaser.Scene {
     if (!m) return;
     this.phone.open(m.id, this.clock.label, this.clock.minutes);
     this.observer.open(m.id, this.clock.label, m.delayMin ?? 0);
-    this.talkingTo = m.from;
+    this.beginTalk({ npc: null, name: m.from }, 'phone');
     this.playEvent(m.item);
   }
 
@@ -732,7 +807,10 @@ export class RoomScene extends Phaser.Scene {
     this.lastAction = `${p.name} — ${choice?.text ?? '봤다'}`;
     // 말을 섞으면 상대 쪽 문이 조금 열린다. **자기 말을 직접 쓴 쪽이 더 크다** —
     // 남이 써준 말을 고르는 것과 자기 말을 만드는 것은 다른 일이다 (game/listening.js와 같은 근거)
-    if (choice) this.raiseAffinity(p, choice.typed ? 'spoke' : 'talk');
+    // **대화했다는 것만으로는 안 오른다.** 자기 말을 직접 쓴 것(spoke)만 센다 —
+    // 선택지를 고른 건 남이 써준 말을 고른 것이고, 그걸로 마음이 열리지는 않는다
+    if (choice?.typed) this.raiseAffinity(p, 'spoke');
+    this.endTalk();
     this.refresh();
   }
 
@@ -752,7 +830,7 @@ export class RoomScene extends Phaser.Scene {
       {
         lines: [{ speaker: '진열대', text: `가진 포인트 ${this.points}P.` }],
         choices: [...choices, { id: '__none', text: '그냥 본다' }],
-        free_input: false,
+        allowFree: false,   // 진열대에 대고 할 말은 없다 — **AI 대화는 절대 끄지 않는다**
       },
       (choice) => {
         if (!choice || choice.id === '__none' || choice.id === '__free') return;
@@ -800,7 +878,7 @@ export class RoomScene extends Phaser.Scene {
     if (!list.length) {
       this.dialogue.play({
         lines: [{ speaker: '취식대', text: '먹을 게 없다. 선반에서 사 와야 한다.' }],
-        choices: [], free_input: false,
+        choices: [], allowFree: false,   // 진열대에 대고 할 말은 없다 — **AI 대화는 절대 끄지 않는다**
       }, () => {}, { speaker: '취식대' });
       return;
     }
@@ -811,7 +889,7 @@ export class RoomScene extends Phaser.Scene {
           ...list.map((i) => ({ id: i.id, text: `${i.label}${i.count > 1 ? ` ×${i.count}` : ''} 먹기` })),
           { id: '__none', text: '그만둔다' },
         ],
-        free_input: false,
+        allowFree: false,   // 진열대에 대고 할 말은 없다 — **AI 대화는 절대 끄지 않는다**
       },
       (choice) => { if (choice && choice.id !== '__none') this.eat(choice.id); },
       { speaker: '취식대' },
@@ -846,6 +924,10 @@ export class RoomScene extends Phaser.Scene {
     const r = raise(this.affinity, p.npc, kind);
     this.affinity = r.state;
     if (!r.moved) return;                                  // 엄마는 100 고정 — 아무 일도 안 일어난다
+    // 머리 위 숫자를 그 자리에서 갱신한다. 다음에 만날 때까지 기다리면 오른 걸 못 본다
+    const live = (this.props ?? []).find((x) => x.npc === p.npc && x.heart);
+    live?.heart.setText(`♥ ${r.to}`)
+      .setColor(r.to >= 70 ? '#ffd447' : r.to >= 45 ? '#c9b799' : '#8a7c6b');
     this.overlay.popAffinity(p.name, r.to);
     this.persist();
   }
@@ -1043,7 +1125,7 @@ export class RoomScene extends Phaser.Scene {
     }
     this.vitals = tickVitals(this.vitals, this.clock.minutes - before);   // 표시용. 규칙엔 영향 없음
     this.overlay.drawHud(this.clock, this.todayScore, this.total, this.aiError, this.points);
-    this.overlay.drawStatus(this.vitals, this.affinityList(), bagList(this.bag));
+    this.overlay.drawStatus(this.vitals, bagList(this.bag));
 
     // 시각이 되면 **폰이 울린다.** 말풍선이 저 혼자 뜨지 않는다 —
     // 읽을지 말지가 이 게임이 재려는 신호이기 때문이다 (game/phone.js)
