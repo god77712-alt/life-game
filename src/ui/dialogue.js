@@ -209,7 +209,14 @@ export class Dialogue {
 
   showChoices() {
     const choices = this.script.choices ?? [];
-    if (!choices.length) {          // 선택지가 없는 이벤트는 읽고 끝
+    // **사람과의 대화는 플레이어만 끝낼 수 있다.**
+    //
+    // 예전에는 선택지가 비면 그냥 닫혔고, 선택지를 하나 고르면 거기서 끝났다.
+    // 그래서 한창 털어놓는 중에도 툭 끊겼다 — 이 게임이 받아내려는 게 정확히
+    // 그 이어지는 말인데. `keepOpen`이 붙은 대화는 답이 없어도 안 닫고,
+    // 끝내는 선택지를 직접 고를 때까지 계속 연다.
+    const keep = this.script.keepOpen === true;
+    if (!choices.length && !keep) {          // 읽고 끝나는 것(안내·연출)만 여기서 닫힌다
       this.lastAttention = this.attention?.summary() ?? null;
       this.close();
       this.onDone?.(null);
@@ -226,9 +233,12 @@ export class Dialogue {
     // **"이 장면이 결정적인가"**를 뜻하고, writer는 결정적 장면에만 true를 낸다.
     // 그걸 "직접말하기 숨김"으로 읽었더니 **모든 NPC 대화에서 입력창이 사라졌다.**
     // 가게·안내처럼 사람이 아닌 화면만 `allowFree: false`로 직접 끈다.
-    this.options = this.script.allowFree === false
-      ? [...choices]
-      : [...choices, { id: '__free', text: '직접 말하기…', free: true }];
+    const tail = [];
+    if (this.script.allowFree !== false) tail.push({ id: '__free', text: '직접 말하기…', free: true });
+    // 이어지는 대화에는 **끝내는 문이 있어야 한다.** 없으면 못 빠져나온다 —
+    // 다만 그 문을 여는 건 플레이어지 코드가 아니다
+    if (keep) tail.push({ id: '__end', text: '(그만 얘기한다)', end: true });
+    this.options = [...choices, ...tail];
 
     this.body.setText('');
     this.speaker.setText('');

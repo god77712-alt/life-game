@@ -33,6 +33,9 @@ const NPC_IDS = ['mom', 'clerk', 'friend', 'homeless', 'cat'];
 /** 붙박이 이름 → 호감도 키. 찾아온 사람이 그 사람인지 알아보는 데 쓴다 */
 const NPC_NAME_TO_ID = { 엄마: 'mom', 친구: 'friend', 노숙자: 'homeless', 길고양이: 'cat', '편의점 알바생': 'clerk' };
 
+/** 채팅 이력을 몇 턴까지 기억하나. 짧으면 상대가 방금 한 말을 잊는다 */
+const CHAT_MEMORY = 40;
+
 const STEP_MS = 160;                          // 한 칸 이동 시간 (ART.md §3)
 const DIRS = {
   up: { dx: 0, dy: -1, tex: 'player-back', flip: false },
@@ -555,8 +558,8 @@ export class RoomScene extends Phaser.Scene {
     // **찾아온 사람은 대본을 들고 왔다.** 정산 때 writer가 이미 써둔 것이라
     // 여기서 실시간 호출이 없다 — 다가가면 곧바로 말이 시작된다
     if (p.visitor && p.script?.lines?.length) {
-      this.dialogue.play(p.script, (choice) => this.recordPropTalk(p, p.script, choice),
-        { speaker: p.name });
+      this.dialogue.play({ ...p.script, keepOpen: true },
+        (choice) => this.recordPropTalk(p, p.script, choice), { speaker: p.name });
       return;
     }
 
@@ -598,7 +601,7 @@ export class RoomScene extends Phaser.Scene {
       .then((r) => r.json())
       .then((out) => {
         if (out.error || !this.dialogue.open) throw new Error(out.error ?? 'closed');
-        this.dialogue.continueWith(out.data);
+        this.dialogue.continueWith({ ...out.data, keepOpen: true });
         this.dialogue.onDone = (choice) => this.recordPropTalk(p, out.data, choice);
       })
       .catch((e) => {
@@ -705,11 +708,27 @@ export class RoomScene extends Phaser.Scene {
    * 그 다음 상대가 답하고, 대화가 이어진다.
    */
   sayFreely(text) {
+    this.speak(text, true);
+  }
+
+  /**
+   * 상대에게 무언가 말한다. **선택지를 고른 것도 여기로 온다.**
+   *
+   * 예전에는 선택지를 고르면 대화가 거기서 끝났다. 그래서 한창 이어져야 할 때
+   * 툭 끊겼다 — 이 게임이 받아내려는 게 정확히 그 이어지는 말인데.
+   * 이제 무엇을 말하든 상대가 답하고, 끝내는 건 플레이어가 `(그만 얘기한다)`를
+   * 고를 때뿐이다.
+   *
+   * @param {string} text 플레이어가 말한 것
+   * @param {boolean} typed 직접 쳤는가. 선택지를 고른 것과는 신호의 무게가 다르다
+   */
+  speak(text, typed) {
+    if (!text) return;
     // 거울은 전용 AI가 맡는다. 여기서 npc-reply로 새면 마지막 장면이 통째로 어긋난다
     if (this.talkingWith?.kind === 'mirror' && this.talkingProp) {
       this.mirrorLog = [...(this.mirrorLog ?? []), { speaker: '나', text }];
-      this.dialogueLog.push({ at: this.clock.label, from: '거울', player: { choice: null, text, typed: true } });
-      this.observer.tell(discloses(text, this.typedBaseline ?? 0), this.clock.label, this.partnerName);
+      this.dialogueLog.push({ at: this.clock.label, from: '거울', player: { choice: null, text, typed } });
+      if (typed) this.observer.tell(discloses(text, this.typedBaseline ?? 0), this.clock.label, this.partnerName);
       this.talkToMirror(this.talkingProp, text);
       return;
     }
@@ -718,11 +737,15 @@ export class RoomScene extends Phaser.Scene {
     // writer가 쓴 이름에 따라 상대가 바뀐다 — 노숙자와 얘기하다 친구가 답했다
     const to = this.partnerName;
 
-    this.observer.tell(discloses(text, this.typedBaseline ?? 0), this.clock.label, to);
-    this.dialogueLog.push({ at: this.clock.label, player: { choice: null, text, typed: true }, to });
-    this.chatLog = [...(this.chatLog ?? []), { speaker: '나', text }].slice(-12);
-    // 자기 말을 직접 쓴 것은 선택지를 고른 것보다 크게 친다 (affinity.js GAIN)
-    this.raiseAffinity(this.talkingProp, 'spoke');
+    // 자기 개방은 **직접 친 문장에서만** 센다. 남이 써준 선택지를 고른 건
+    // 자기 말이 아니다 (listening.js와 같은 근거)
+    if (typed) {
+      this.observer.tell(discloses(text, this.typedBaseline ?? 0), this.clock.label, to);
+      this.raiseAffinity(this.talkingProp, 'spoke');
+    }
+    this.dialogueLog.push({ at: this.clock.label, player: { choice: null, text, typed }, to });
+    // 이력은 넉넉히 남긴다 — 짧게 자르면 상대가 방금 한 말을 잊는다
+    this.chatLog = [...(this.chatLog ?? []), { speaker: '나', text }].slice(-CHAT_MEMORY);
 
     // 내가 한 말을 먼저 보여주고, 그 사이에 답을 만든다
     this.dialogue.play(
@@ -754,13 +777,9 @@ export class RoomScene extends Phaser.Scene {
           this.chatLog.push({ speaker: l.speaker, text: l.text });
           this.dialogueLog.push({ at: this.clock.label, speaker: l.speaker, text: l.text, from: '채팅' });
         }
-        this.dialogue.continueWith(out.data);
-        this.dialogue.onDone = (choice) => {
-          this.recordListening(choice, to);
-          if (choice?.free) return;               // 또 직접 말하기 — onInputOpen이 받는다
-          this.lastAction = `${to ?? '대화'} — ${choice?.text ?? '…'}`;
-          this.refresh();
-        };
+        // **끝내는 건 플레이어만.** 답에 선택지가 없어도 대화창은 안 닫힌다
+        this.dialogue.continueWith({ ...out.data, keepOpen: true });
+        this.dialogue.onDone = (choice) => this.afterReply(choice, to);
       })
       .catch((e) => {
         console.warn('[npc-reply]', e.message);
@@ -930,7 +949,9 @@ export class RoomScene extends Phaser.Scene {
     // **대화했다는 것만으로는 안 오른다.** 자기 말을 직접 쓴 것(spoke)만 센다 —
     // 선택지를 고른 건 남이 써준 말을 고른 것이고, 그걸로 마음이 열리지는 않는다
     if (choice?.typed) this.raiseAffinity(p, 'spoke');
-    this.endTalk();
+    // 고른 말을 그대로 건넨다 — **선택지를 골랐다고 대화가 끝나지 않는다**
+    if (choice && !choice.end && !choice.free) { this.speak(choice.text, false); return; }
+    if (!choice || choice.end) this.endTalk();
     this.refresh();
   }
 
@@ -1080,6 +1101,24 @@ export class RoomScene extends Phaser.Scene {
     this.errands = errands.ask(this.errands, npc, this.clock.label);
     const open = errands.openOf(this.errands, npc);
     return open.length > before ? open[open.length - 1] : (open[0] ?? null);
+  }
+
+  /**
+   * 상대가 답한 뒤 플레이어가 고른 것.
+   *
+   * **선택지를 골랐다고 대화가 끝나지 않는다.** 그 말을 상대에게 건네고 계속 간다 —
+   * 끊기는 건 `(그만 얘기한다)`를 고를 때, 또는 답이 끝내 안 올 때뿐이다.
+   */
+  afterReply(choice, to) {
+    this.recordListening(choice, to);
+    if (choice?.free) return;                    // 또 직접 말하기 — onInputOpen이 받는다
+    if (choice && !choice.end) {                 // 고른 말을 그대로 건넨다. 대화는 이어진다
+      this.speak(choice.text, false);
+      return;
+    }
+    this.lastAction = `${to ?? '대화'} — ${choice?.end ? '그만 얘기했다' : '…'}`;
+    this.endTalk();
+    this.refresh();
   }
 
   /** 상태창에 띄울 호감도 목록. 만난 적 있는 사람만 */
@@ -1606,8 +1645,13 @@ export class RoomScene extends Phaser.Scene {
     this.label.setVisible(false);
     this.labelBox.setVisible(false);
 
-    this.dialogue.play(item.script, (choice) => {
-      this.recordListening(choice, item.script.lines?.[0]?.speaker ?? null);
+    // 연락을 연 것도 사람과의 대화다 — **끝내는 건 플레이어만.**
+    // 상대를 여기서 못 박아야 이어지는 말이 엉뚱한 사람에게 안 간다
+    const from = item.script.lines?.[0]?.speaker ?? null;
+    if (from) this.beginTalk({ npc: this.npcIdOf(from), name: from }, 'phone');
+
+    this.dialogue.play({ ...item.script, keepOpen: true }, (choice) => {
+      this.recordListening(choice, from);
       // 원문 그대로 남긴다 — 심리상담 확장의 유일한 자산 (DESIGN.md §4)
       for (const l of item.script.lines) {
         this.dialogueLog.push({ at: this.clock.label, speaker: l.speaker, text: l.text });
@@ -1621,6 +1665,9 @@ export class RoomScene extends Phaser.Scene {
         signal_wanted: item.event.signal_wanted,
       });
       this.lastAction = `${item.event.kind} — ${choice?.text ?? '무응답'}`;
+      // 고른 말을 상대에게 건네고 대화를 이어간다. 답장은 여기서부터 npc-reply가 쓴다
+      if (choice && !choice.end && !choice.free) { this.speak(choice.text, false); return; }
+      if (choice?.end) this.endTalk();
       this.refresh();
     });
     this.refresh();
