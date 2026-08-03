@@ -4,7 +4,7 @@
 import { validateVision, GRID_W, GRID_H } from '../room/schema.js';
 import { buildRoom } from '../room/mapper.js';
 import { MOCK_ROOMS } from '../room/mock.js';
-import { MAPS, ROOM_EXIT, returnWall, GOAL_ID, registerGoalMap, clearGoalMap, mapList } from '../game/maps.js';
+import { MAPS, ROOM_EXIT, returnWall, GOAL_ID, registerGoalMap, clearGoalMap, mapList, freeSpots } from '../game/maps.js';
 import { actionFor, potentialScore, promptLine, nameOf } from '../game/actions.js';
 import { Clock, fmt } from '../game/clock.js';
 import { residentsAt, timeBand } from '../game/residents.js';
@@ -29,6 +29,9 @@ import { TILE, ROOM_TOP, buildBaseTextures, objectTexture, THEMES } from '../ren
 
 /** 부탁을 할 수 있는 사람들. 여기 없는 id로 온 부탁은 버려진다 (game/residents.js와 같은 키) */
 const NPC_IDS = ['mom', 'clerk', 'friend', 'homeless', 'cat'];
+
+/** 붙박이 이름 → 호감도 키. 찾아온 사람이 그 사람인지 알아보는 데 쓴다 */
+const NPC_NAME_TO_ID = { 엄마: 'mom', 친구: 'friend', 노숙자: 'homeless', 길고양이: 'cat', '편의점 알바생': 'clerk' };
 
 const STEP_MS = 160;                          // 한 칸 이동 시간 (ART.md §3)
 const DIRS = {
@@ -321,6 +324,7 @@ export class RoomScene extends Phaser.Scene {
     this.metProps = new Set();      // 오늘 이미 다가간 무대
     this.propNames = new Map();     // 관측 키 → 이름
     this.errands = [];             // 오늘의 부탁. 디렉터가 만든다 (game/errands.js)
+    this.visitors = [];            // 오늘 찾아온 사람들. `{map}`에 매여 있다
     this.gaveTo = new Set();       // 오늘 뭔가 건넨 상대. 가방과 포인트는 날짜를 넘어 남는다
     this.buildMap();
     this.enterPlace();
@@ -426,6 +430,9 @@ export class RoomScene extends Phaser.Scene {
 
   drawNpcs() {
     this.props = [];
+    // 찾아온 사람은 **슬롯을 안 쓴다.** 그 자리에 온 것이므로 좌표를 이미 갖고 있고,
+    // 사진에서 온 내 방(슬롯이 없는 맵)에도 설 수 있어야 한다
+    this.drawVisitors();
     const slots = MAPS[this.mapId]?.slots ?? [];
     if (!slots.length) return;
 
@@ -484,6 +491,46 @@ export class RoomScene extends Phaser.Scene {
     }
   }
 
+  /** 오늘 이 공간에 찾아온 사람들을 세운다. 자리가 막혔으면 옆으로 옮긴다 */
+  drawVisitors() {
+    for (const v of this.visitors ?? []) {
+      if (v.map && v.map !== this.mapId) continue;
+      v.map ??= this.mapId;
+
+      let spot = { x: v.x, y: v.y };
+      if (this.built.collision[spot.y]?.[spot.x] !== 0) {
+        const [alt] = freeSpots(this.built, { near: spot, exclude: [{ x: this.gx, y: this.gy }] });
+        if (!alt) continue;                        // 설 데가 없으면 오늘은 못 온 것으로
+        spot = alt;
+      }
+      v.x = spot.x; v.y = spot.y;
+
+      const bottom = ROOM_TOP + (spot.y + 1) * TILE;
+      const sprite = this.add.image(spot.x * TILE, bottom, 'prop-person')
+        .setOrigin(0, 1).setDepth(bottom + 1);
+      this.layer.add(sprite);
+      this.built.collision[spot.y][spot.x] = 1;
+
+      const key = `${this.mapId}:visit:${v.name}`;
+      this.propNames.set(key, v.name);
+      const p = { ...v, look: 'person', key, w: 1, h: 1, sprite, visitor: true,
+        met: this.metProps.has(key) };
+      this.props.push(p);
+
+      if (v.npc) {
+        const val = affinityOf(this.affinity, v.npc);
+        const heart = this.add.text(spot.x * TILE + TILE / 2, bottom - TILE * 1.5 - 3,
+          `♥ ${val}`, {
+            fontFamily: 'monospace', fontSize: '8px', resolution: 1,
+            color: val >= 70 ? '#ffd447' : val >= 45 ? '#c9b799' : '#8a7c6b',
+            stroke: '#1a1714', strokeThickness: 3,
+          }).setOrigin(0.5, 1).setDepth(bottom + 2);
+        this.layer.add(heart);
+        p.heart = heart;
+      }
+    }
+  }
+
   propAt(x, y) {
     return this.props?.find((p) => p.x === x && p.y === y) ?? null;
   }
@@ -504,6 +551,14 @@ export class RoomScene extends Phaser.Scene {
     p.met = true;
 
     if (p.isMirror) { this.talkToMirror(p); return; }   // 마지막 장면은 다른 AI가 맡는다
+
+    // **찾아온 사람은 대본을 들고 왔다.** 정산 때 writer가 이미 써둔 것이라
+    // 여기서 실시간 호출이 없다 — 다가가면 곧바로 말이 시작된다
+    if (p.visitor && p.script?.lines?.length) {
+      this.dialogue.play(p.script, (choice) => this.recordPropTalk(p, p.script, choice),
+        { speaker: p.name });
+      return;
+    }
 
     // `detail`부터 한 자씩 띄운다. 다 읽을 때쯤 생성이 끝나 대기가 연출로 덮인다.
     // pending — 이 줄이 끝나도 닫지 않고 뒷말을 기다린다.
@@ -744,6 +799,57 @@ export class RoomScene extends Phaser.Scene {
     return this.talkingWith?.name ?? null;
   }
 
+  // ── 찾아오는 사람 ───────────────────────────────────────
+  //
+  // 지금까지 세상은 **플레이어가 가야만** 움직였다 — 폰 앞으로 걸어가거나
+  // NPC에게 다가가야 무슨 일이 생겼다. 그런데 현실은 안 그렇다.
+  // 방에 있는데 엄마가 문을 두드리고, 아무것도 안 하고 있는데 친구가 찾아온다.
+  //
+  // **거절할 수는 있어도 온 것 자체를 못 본 척할 수는 없다.** 그게 폰과 다른 점이고,
+  // 그래서 폰이 재는 신호(열까 말까)와 다른 걸 잰다 — 앞에 있는 사람을 어떻게 하는가.
+
+  /**
+   * 지금 있는 곳으로 누가 찾아온다. 설 자리가 없으면 실패하고 폰으로 떨어진다.
+   * @returns {boolean} 실제로 왔는가
+   */
+  receiveVisit(due) {
+    const who = due.script?.lines?.[0]?.speaker ?? due.event?.target ?? '누군가';
+    const taken = [
+      { x: this.gx, y: this.gy },
+      ...(this.props ?? []).map((p) => ({ x: p.x, y: p.y })),
+    ];
+    // 플레이어 근처에 선다 — 방 건너편에 세우면 찾아온 게 아니라 놓여 있는 게 된다
+    const [spot] = freeSpots(this.built, { near: { x: this.gx, y: this.gy }, exclude: taken });
+    if (!spot) return false;
+
+    this.visitors.push({
+      npc: this.npcIdOf(who),
+      name: who,
+      look: 'person',
+      detail: due.script?.lines?.[0]?.text ?? '문 앞에 서 있다.',
+      // **대본이 이미 있다.** 정산 때 writer가 써둔 것이므로 다가가도 실시간 호출이 없다
+      script: due.script,
+      event: due.event,
+      visitedAt: this.clock.label,
+      x: spot.x, y: spot.y,
+    });
+
+    this.buildMap({ x: this.gx, y: this.gy });     // 지금 자리를 지킨 채 다시 세운다
+    this.overlay.popNotice(`${who}이(가) 찾아왔다`, '#ffd447');
+    this.lastAction = `${who} — 찾아왔다 (${this.clock.label})`;
+    this.observer.notify(due.id, who, this.clock.label);
+    // 폰과 달리 **온 순간 이미 본 것이다.** 지연은 여는 데 걸린 시간이 아니라
+    // 말을 섞기까지 걸린 시간이 된다
+    this.refresh();
+    return true;
+  }
+
+  /** 이름으로 호감도 키를 찾는다. 모르는 사람이면 null — 그래도 대화는 된다 */
+  npcIdOf(name) {
+    for (const [id, n] of this.npcNames ?? []) if (n === name) return id;
+    return NPC_NAME_TO_ID[name] ?? null;
+  }
+
   /**
    * npc-reply에 넘길 상대. **cast에 없는 사람도 제대로 넘어가야 한다** —
    * 노숙자·길고양이·오늘의 프롭은 캐스팅 목록에 없고, 이름만 넘기면
@@ -775,7 +881,20 @@ export class RoomScene extends Phaser.Scene {
    */
   buzz(m) {
     this.lastAction = `${m.from} — 연락 (${this.phone.unread.length}통 안 읽음)`;
+    // **온 걸 모르면 안 온 것과 같다.** 예전에는 DEV 패널에만 적혀서,
+    // 방에서 폰 쪽을 안 보고 있으면 연락이 왔는지조차 알 수 없었다.
+    // 단 **열지 말지는 여전히 플레이어가 정한다** — 말풍선이 저 혼자 뜨지 않는다
+    this.overlay.popNotice(`${m.from} — 연락`, '#9fd8ff');
+    this.lightPhone();
     this.refresh();
+  }
+
+  /** 안 읽은 게 있으면 폰 화면이 켜져 있다. 방에 들어서면 눈에 띈다 */
+  lightPhone() {
+    const phone = this.built?.objects?.find((o) => o.type === 'phone' && !o.removed);
+    if (!phone) return;
+    const want = this.phone.unread.length ? 'lit' : '';
+    if (phone.variant !== want) this.paint(phone, want);
   }
 
   /**
@@ -788,6 +907,7 @@ export class RoomScene extends Phaser.Scene {
     this.phone.open(m.id, this.clock.label, this.clock.minutes);
     this.observer.open(m.id, this.clock.label, m.delayMin ?? 0);
     this.beginTalk({ npc: null, name: m.from }, 'phone');
+    this.lightPhone();          // 다 읽었으면 화면이 꺼진다
     this.playEvent(m.item);
   }
 
@@ -967,6 +1087,35 @@ export class RoomScene extends Phaser.Scene {
     return affinityLines(this.affinity, Object.fromEntries(this.npcNames ?? []));
   }
 
+  /**
+   * 인물별로 **지금까지 쌓인 것.** 디렉터가 `confide`를 짜는 재료다.
+   *
+   * 고민을 꺼내려면 두 가지가 있어야 한다 — 그 사람과 사이가 됐다는 것(호감도),
+   * 그리고 플레이어가 그 사람에게 실제로 한 말(원문). 둘 다 없이 고민을 꺼내면
+   * 그건 아무에게나 하는 신세한탄이고, 플레이어가 반응할 이유가 없다.
+   *
+   * **원문을 그대로 넘긴다.** 요약하면 말투가 사라지고, 말투가 사라지면
+   * 그 옆에 놓을 고민을 지을 수가 없다 (CLAUDE.md — 요약 금지).
+   */
+  bonds() {
+    const names = Object.fromEntries(this.npcNames ?? []);
+    const told = this.observer?.told ?? [];
+    const ids = new Set([...Object.keys(this.affinity ?? {}), ...(this.npcNames?.keys() ?? [])]);
+
+    return [...ids].map((npc) => {
+      const name = names[npc] ?? npc;
+      const mine = told.filter((t) => t.to === name);
+      return {
+        npc,
+        name,
+        affinity: affinityOf(this.affinity, npc),
+        // 이 사람에게 **자기 얘기**를 한 적이 있는가. 없으면 아직 고민을 들을 사이가 아니다
+        opened: mine.filter((t) => t.self).length,
+        said: mine.map((t) => t.text).filter(Boolean).slice(-6),
+      };
+    }).sort((a, b) => b.affinity - a.affinity);
+  }
+
   // ── 관측 ────────────────────────────────────────────────
 
   /** 이 공간에서 할 수 있는 일들. "있었는데 안 건드린 것"을 알려면 목록이 필요하다. */
@@ -1031,7 +1180,12 @@ export class RoomScene extends Phaser.Scene {
   targetLine(o, done, action = null) {
     if (o.type === 'door') return this.doorLine(o);
     const waiting = o.type === 'phone' ? this.phone.unread.length : 0;
-    if (waiting) return `휴대폰   ${waiting}통 안 읽음   [Space] 열기`;
+    if (waiting) {
+      // **누가 보냈는지가 보여야 연락이 사건이 된다.** 개수만 뜨면 그냥 배지다
+      const next = this.phone.next();
+      const more = waiting > 1 ? `  외 ${waiting - 1}통` : '';
+      return `${next.from}  "${next.preview}"${more}   [Space] 열기`;
+    }
     if (action && action.verb === 'look' && action.label !== '보기') {
       return done ? `${nameOf(o)}   ✓ ${action.label}` : `${nameOf(o)}   [Space] ${action.label}`;
     }
@@ -1127,14 +1281,23 @@ export class RoomScene extends Phaser.Scene {
     this.overlay.drawHud(this.clock, this.todayScore, this.total, this.aiError, this.points);
     this.overlay.drawStatus(this.vitals, bagList(this.bag));
 
-    // 시각이 되면 **폰이 울린다.** 말풍선이 저 혼자 뜨지 않는다 —
-    // 읽을지 말지가 이 게임이 재려는 신호이기 때문이다 (game/phone.js)
+    // 시각이 되면 이벤트가 도착한다. **두 가지 방식이 있다:**
+    //
+    //   폰이 울린다   연락. 열지 말지를 플레이어가 고른다 (delay_min이 곧 reaction 신호)
+    //   찾아온다      친구가 집에 오고 엄마가 방문을 두드린다. 거절할 수는 있어도
+    //                 **온 것 자체를 못 본 척할 수는 없다**
+    //
+    // 전부 폰으로만 오면 플레이어가 폰 앞에 가야만 세상이 움직인다. 현실은 안 그렇다.
     const due = this.schedule?.due(this.clock.minutes);
     if (due) {
       this.schedule.markPlayed(due.id);
-      const m = this.phone.arrive(due, this.clock.label, this.clock.minutes);
-      this.observer.notify(m.id, m.from, m.at);
-      this.buzz(m);
+      if (due.event?.kind === 'visit' && this.receiveVisit(due)) {
+        // 찾아왔다 — 폰에는 안 쌓인다
+      } else {
+        const m = this.phone.arrive(due, this.clock.label, this.clock.minutes);
+        this.observer.notify(m.id, m.from, m.at);
+        this.buzz(m);
+      }
     }
 
     if (this.moving) {
@@ -1553,6 +1716,8 @@ export class RoomScene extends Phaser.Scene {
       cast: this.cast,
       // 부탁 — **안 한 것이 빠지면 이 체계를 만든 이유가 없다**
       errands: errands.summary(this.errands),
+      // 인물별 호감도 + 그 사람에게 한 말 원문 — 고민(confide)을 지을 재료
+      bonds: this.bonds(),
       places: this.placesForDirector(),
     };
 

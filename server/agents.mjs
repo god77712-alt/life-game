@@ -259,7 +259,9 @@ const PLAN_SCHEMA = obj({
   events: arr(obj({
     id: str(),
     at: str(),                                  // "10:30" 게임 내 시각
-    kind: str(['dialogue', 'triple', 'nudge']),
+    // visit — **찾아온다.** 폰이 아니라 플레이어가 있는 자리에 사람이 선다
+    // confide — 그 사람이 자기 고민을 꺼낸다. 호감도가 쌓인 상대에게만
+    kind: str(['dialogue', 'triple', 'nudge', 'visit', 'confide']),
     target: str(),                              // 가설 id 또는 "none"
     purpose: str(),
     signal_wanted: arr(str(['language', 'reaction', 'behavior'])),
@@ -367,7 +369,7 @@ export const AGENTS = {
   director: {
     role: '편성 — 내일 무엇을 언제 왜 던질지 정한다',
     prompt: 'director', schema: PLAN_SCHEMA, effort: 'high', maxTokens: 14000,
-    vars: ['day', 'world', 'table', 'analysis', 'history', 'places', 'cast', 'errands'],
+    vars: ['day', 'world', 'table', 'analysis', 'history', 'places', 'cast', 'errands', 'bonds'],
   },
   writer: {
     role: '집필 — 편성 1건을 실제 대사와 선택지로 만든다',

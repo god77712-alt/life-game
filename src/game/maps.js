@@ -228,23 +228,44 @@ export function registerGoalMap(goal) {
  * 조건 세 가지: 비어 있을 것 / 시작 칸이 아닐 것 / 사방 중 두 칸 이상 열려 있을 것.
  * 마지막 조건이 없으면 거울이 통로를 막아 플레이어가 갇힌다.
  */
-function mirrorSpot(vision) {
-  const b = buildRoom(vision);
-  const free = (x, y) => b.collision[y]?.[x] === 0;
-  const open = (x, y) => [[1, 0], [-1, 0], [0, 1], [0, -1]].filter(([dx, dy]) => free(x + dx, y + dy)).length;
+/**
+ * 사람이 설 수 있는 칸들. 가까운 곳부터.
+ *
+ * **찾아오는 사람에게도 필요하다** — 친구가 집에 오려면 설 자리가 있어야 하는데,
+ * 사진에서 온 내 방은 `slots`가 아예 없다(손으로 쓴 맵이 아니므로). 그래서
+ * 좌표를 미리 박아두는 대신 그 자리에서 빈 칸을 찾는다.
+ *
+ * 조건 셋: 비어 있을 것 / 지정한 칸이 아닐 것 / **사방 중 두 칸 이상 열려 있을 것.**
+ * 마지막이 없으면 막다른 칸에 세워 통로가 끊기고 플레이어가 갇힌다.
+ *
+ * @param {{collision:number[][], spawn:{x:number,y:number}}} built
+ * @param {{near?:{x:number,y:number}, exclude?:Array<{x:number,y:number}>}} opt
+ *   near — 이 칸에 가까운 순으로. 없으면 방 가운데 기준
+ */
+export function freeSpots(built, opt = {}) {
+  const free = (x, y) => built.collision[y]?.[x] === 0;
+  const open = (x, y) => [[1, 0], [-1, 0], [0, 1], [0, -1]]
+    .filter(([dx, dy]) => free(x + dx, y + dy)).length;
 
-  let best = null;
+  const skip = new Set((opt.exclude ?? []).map((p) => `${p.x},${p.y}`));
+  const anchor = opt.near ?? { x: 5.5, y: 4.5 };
+
+  const out = [];
   for (let y = 1; y <= 8; y++) {
     for (let x = 1; x <= 10; x++) {
-      if (!free(x, y)) continue;
-      if (x === b.spawn.x && y === b.spawn.y) continue;      // 플레이어가 서는 칸
-      if (open(x, y) < 2) continue;                          // 막다른 칸 — 놓으면 길이 끊긴다
-      // 가운데에 가까울수록 좋다. 구석에 세워두면 못 보고 지나친다
-      const d = Math.abs(x - 5.5) + Math.abs(y - 4.5);
-      if (!best || d < best.d) best = { x, y, d };
+      if (!free(x, y) || skip.has(`${x},${y}`)) continue;
+      if (open(x, y) < 2) continue;
+      out.push({ x, y, d: Math.abs(x - anchor.x) + Math.abs(y - anchor.y) });
     }
   }
-  return best ? { x: best.x, y: best.y } : { x: b.spawn.x, y: b.spawn.y };
+  return out.sort((a, b) => a.d - b.d).map(({ x, y }) => ({ x, y }));
+}
+
+function mirrorSpot(vision) {
+  const b = buildRoom(vision);
+  // 가운데에 가까울수록 좋다. 구석에 세워두면 못 보고 지나친다
+  const [best] = freeSpots(b, { exclude: [b.spawn] });
+  return best ?? { x: b.spawn.x, y: b.spawn.y };
 }
 
 /** 새 게임. 골 맵은 게임마다 새로 지어진다. */
