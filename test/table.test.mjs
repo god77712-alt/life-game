@@ -8,7 +8,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  actOf, actLine, hypoLabel, ranked, cols, clip, settleLines, devLine, WIDTH,
+  actOf, actLine, hypoLabel, ranked, cols, clip, settleLines, devLine, counted, WIDTH,
 } from '../src/game/table.js';
 
 // ── Act ──────────────────────────────────────────────────────
@@ -113,18 +113,48 @@ test('며칠째고 뭐가 쌓였는지가 줄에 있다', () => {
   const out = settleLines(TABLE).join('\n');
   assert.match(out, /Act 2 {2}골 발견/);
   assert.match(out, /지훈 · 고양이 · 약속 없을 때/);
-  assert.match(out, /testing {2}0\.45 {2}검증 1회/);
   assert.match(out, /남은 것 — 지훈에게 자기 얘기 0\/1회/, '왜 아직 확정이 아닌지가 보여야 한다');
   assert.match(out, /회피 {2}응답이 돌아오는 상태를 피한다/);
+});
+
+test('**소수점을 안 띄운다** — 없는 정밀도를 주장하지 않는다', () => {
+  // confidence는 통계량이 아니라 코드가 ±상수씩 옮긴 내부 카운터다.
+  // n=1 자료로 0.45를 띄우면 있지도 않은 정밀도를 주장하는 것이 된다
+  const out = settleLines(TABLE).join('\n');
+  assert.equal(/\d\.\d\d/.test(out), false, `소수점이 남아 있다:\n${out}`);
+  // 대신 **센 것**이 적힌다
+  assert.match(out, /검증 1\/2/);
+  assert.match(out, /자기얘기 0\/1/);
+  assert.match(out, /말[✓·] 반응[✓·] 행동[✓·]/, '어느 겹이 비었는지가 보여야 한다');
+});
+
+test('센 것은 전부 개수다 — 물어보면 그대로 답할 수 있어야 한다', () => {
+  const h = {
+    signals: [{ kind: 'language' }, { kind: 'behavior' }],
+    verified_count: 1, opened_to_who: 0,
+  };
+  const line = counted(h, { layers: ['language', 'reaction', 'behavior'], verifications: 2, needsOpening: 1 });
+  assert.match(line, /말✓/);
+  assert.match(line, /반응·/, '없는 겹은 · 로');
+  assert.match(line, /행동✓/);
+  assert.match(line, /검증 1\/2/);
+  assert.match(line, /자기얘기 0\/1/);
+});
+
+test('문턱은 서버가 보낸 값을 쓴다 — 화면이 다시 적으면 갈라진다', () => {
+  const h = { signals: [], verified_count: 0, opened_to_who: 0 };
+  const line = counted(h, { layers: ['language'], verifications: 5, needsOpening: 3 });
+  assert.match(line, /검증 0\/5/, '서버가 5라고 하면 5로 보여야 한다');
+  assert.match(line, /자기얘기 0\/3/);
+  assert.equal(/반응/.test(line), false, '서버가 안 보낸 겹은 안 그린다');
 });
 
 test('맨 위 가설만 자세히, 나머지는 한 줄씩', () => {
   const out = settleLines(TABLE);
   assert.match(out.join('\n'), /Act 2 {2}골 발견 · 가설 3/, '몇 개를 놓고 재는 중인지가 보인다');
-  // 자세한 줄(남은 것)은 맨 위 하나에만 붙는다
   assert.equal(out.filter((l) => l.startsWith('남은 것')).length, 1);
-  assert.ok(out.includes('· 새벽 편의점 · 점원 없는 시간 (0.20)'));
-  assert.ok(out.includes('· 세 번째 (0.20)'));
+  assert.ok(out.includes('· 새벽 편의점 · 점원 없는 시간'));
+  assert.ok(out.includes('· 세 번째'));
 });
 
 test('중요한 것이 앞에 온다 — 뒤에서부터 잘려도 남게', () => {
@@ -135,9 +165,16 @@ test('중요한 것이 앞에 온다 — 뒤에서부터 잘려도 남게', () =
 });
 
 test('확정된 가설에는 별이 붙고 "남은 것"이 사라진다', () => {
-  const t = { act: 3, hypotheses: [{ id: 'h1', label: 'ㄱ', status: 'confirmed', confidence: 0.8, verified_count: 2, missing: ['있으면 안 된다'] }] };
+  const t = { act: 3, hypotheses: [{
+    id: 'h1', label: 'ㄱ', status: 'confirmed', confidence: 0.8,
+    verified_count: 2, opened_to_who: 1,
+    signals: [{ kind: 'language' }, { kind: 'reaction' }, { kind: 'behavior' }],
+    missing: ['있으면 안 된다'],
+  }] };
   const out = settleLines(t).join('\n');
-  assert.match(out, /★ confirmed/);
+  assert.match(out, /★ 확인됨/);
+  assert.match(out, /검증 2\/2/);
+  assert.match(out, /말✓ 반응✓ 행동✓/, '확인됐으면 세 겹이 다 차 있어야 한다');
   assert.ok(!out.includes('남은 것'));
 });
 

@@ -46,6 +46,36 @@ export function hypoLabel(h) {
   return h.statement || h.desire || h.id || '—';
 }
 
+// ── 센 것만 보여준다 ─────────────────────────────────────────
+//
+// 예전에는 `testing 0.45`처럼 소수점 둘째 자리를 띄웠다. 그런데 그 숫자는 통계량이 아니라
+// 코드가 판정마다 +0.10 / −0.15씩 옮긴 내부 카운터다(hypothesis.mjs MOVE).
+// 자유 입력이 게임당 2~3회뿐인 n=1 자료로 **없는 정밀도를 주장하고 있었다.**
+//
+// 게임 행동으로 사람을 읽는 연구들의 상관은 대체로 r≈0.15~0.30이다. 실재하지만 작다.
+// 그러니 화면에는 **실제로 센 것만** 적는다 — 몇 겹이 나왔나, 몇 번 검증됐나,
+// 자기 얘기를 몇 번 했나. 전부 개수라서 물어보면 그대로 답할 수 있다.
+//
+// confidence 자체는 여전히 판정에 쓰이고 DEV 패널에는 남는다. 내부 값이니 디버그에는 맞다.
+
+/** 3겹 신호 — 어느 겹이 비었는지가 숫자보다 많은 걸 말한다 */
+const LAYER_LABEL = { language: '말', reaction: '반응', behavior: '행동' };
+
+/**
+ * 그 가설이 지금 무엇을 얼마나 갖고 있는가. **문턱은 서버가 보내준 값을 쓴다** —
+ * 여기서 다시 적으면 hypothesis.mjs와 갈라지고 화면이 거짓말을 시작한다.
+ */
+export function counted(h, confirm = null) {
+  const layers = confirm?.layers ?? ['language', 'reaction', 'behavior'];
+  const kinds = new Set((h?.signals ?? []).map((s) => s.kind));
+  const sig = layers.map((k) => `${LAYER_LABEL[k] ?? k}${kinds.has(k) ? '✓' : '·'}`).join(' ');
+
+  const parts = [sig];
+  parts.push(`검증 ${h?.verified_count ?? 0}/${confirm?.verifications ?? 2}`);
+  parts.push(`자기얘기 ${h?.opened_to_who ?? 0}/${confirm?.needsOpening ?? 1}`);
+  return parts.join(' · ');
+}
+
 /** confirmed가 맨 위, 그다음 confidence 높은 순. 버려진 가설은 빠진다 */
 export function ranked(table) {
   return (table?.hypotheses ?? [])
@@ -123,14 +153,16 @@ export function settleLines(table, s = {}) {
   // 디렉터가 여러 개를 놓고 재고 있다는 사실만 보이면 된다
   const [top, ...rest] = list;
   out.push(clip(hypoLabel(top), WIDTH));
-  const mark = top.status === 'confirmed' ? '★ ' : '';
-  out.push(`${mark}${top.status ?? 'forming'}  ${(top.confidence ?? 0).toFixed(2)}  검증 ${top.verified_count ?? 0}회`);
+  // **센 것만.** 소수점은 없는 정밀도를 주장한다 (위 주석 참고)
+  out.push(top.status === 'confirmed'
+    ? `★ 확인됨 — ${counted(top, table?.confirm)}`
+    : clip(counted(top, table?.confirm), WIDTH));
   // 왜 아직 확정이 아닌가 — 서버가 붙여준다(hypothesis.mjs missing). 첫 줄만 보인다
   const block = top.missing?.[0];
   if (block && top.status !== 'confirmed') out.push(clip(`남은 것 — ${block}`, WIDTH));
 
   for (const h of rest.slice(0, s.rest ?? 2)) {
-    out.push(clip(`· ${hypoLabel(h)} (${(h.confidence ?? 0).toFixed(2)})`, WIDTH));
+    out.push(clip(`· ${hypoLabel(h)}`, WIDTH));
   }
 
   if (table?.avoidance?.pattern) out.push(clip(`회피  ${table.avoidance.pattern}`, WIDTH));
@@ -144,8 +176,10 @@ export function settleLines(table, s = {}) {
 export function devLine(table, s = {}) {
   const list = ranked(table);
   if (!list.length) return '';
+  // DEV 패널에는 **내부값 그대로.** confidence는 판정에 실제로 쓰이는 값이라
+  // 디버그에서는 보여야 한다 — 화면(정산창)에서만 센 것으로 바꾼 것이다
   const body = list
-    .map((h) => `${hypoLabel(h)}(${h.status} ${(h.confidence ?? 0).toFixed(2)} v${h.verified_count ?? 0})`)
+    .map((h) => `${hypoLabel(h)}(${h.status} conf${(h.confidence ?? 0).toFixed(2)} ${counted(h, table?.confirm)})`)
     .join('  ');
   return `가설   ${body}\n       ${actLine(table, s)}`;
 }

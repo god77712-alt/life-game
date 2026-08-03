@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 
 import { hasKey, verifyKey, keyShape, roomVision, checkReality, runAgent, agentList, AGENTS, MODEL } from './agents.mjs';
-import { applyStatus, missing, applyVerdicts, mergeAnalysis } from './hypothesis.mjs';
+import { applyStatus, missing, applyVerdicts, mergeAnalysis, CONFIRM } from './hypothesis.mjs';
 import { clearPromptCache } from './prompts.mjs';
 import { stats as cacheStats } from './cache.mjs';
 
@@ -262,6 +262,9 @@ async function runSettle(body) {
       ...analysis,
       verdicts,
       hypotheses: analysis.hypotheses.map((h) => ({ ...h, missing: missing(h) })),
+      // **문턱을 화면이 다시 적지 않게 같이 보낸다.** 클라이언트가 2회·3겹을 하드코딩하면
+      // hypothesis.mjs와 갈라지고, 그 순간 화면이 거짓말을 시작한다
+      confirm: CONFIRM,
     };
   } catch (err) {
     console.error(`[settle] day${day} 분석 실패 ${Date.now() - t0}ms  ${err.code ?? ''} ${err.message}`);
