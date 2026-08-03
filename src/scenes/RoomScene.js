@@ -7,10 +7,11 @@ import { MOCK_ROOMS } from '../room/mock.js';
 import { MAPS, ROOM_EXIT, returnWall, GOAL_ID, registerGoalMap, clearGoalMap, mapList, freeSpots } from '../game/maps.js';
 import { actionFor, potentialScore, promptLine, nameOf } from '../game/actions.js';
 import { Clock, fmt } from '../game/clock.js';
-import { residentsAt, timeBand } from '../game/residents.js';
+import { residentsAt, timeBand, mealAt } from '../game/residents.js';
 import { initialAffinity, raise, affinityLines, affinityOf } from '../game/affinity.js';
 import { ITEMS, POINT_PER_SCORE, buy, take, has, bagList, wantedFrom, itemLabel } from '../game/shop.js';
 import * as errands from '../game/errands.js';
+import * as effects from '../game/effects.js';
 import { Schedule } from '../game/schedule.js';
 import { initialVitals, tickVitals, afterSleep, vitalsLine } from '../game/vitals.js';
 import { Observer } from '../game/observer.js';
@@ -276,6 +277,8 @@ export class RoomScene extends Phaser.Scene {
       // 호감도는 그날 아침으로 되돌리지 않는다 — 관계는 하루로 초기화되는 게 아니다
       this.affinity = initialAffinity(s.affinity);
       this.points = s.points ?? 0;
+      this.pending = s.pending ?? [];
+      this.placed = s.placed ?? [];
       this.bag = s.bag ?? {};
       this.npcNames = new Map(Object.entries(s.npcNames ?? {}));
       this.rebuild();
@@ -374,7 +377,14 @@ export class RoomScene extends Phaser.Scene {
 
     // 사진 맵만 검증을 거친다. 손으로 쓴 맵은 검증하면 문이 하나로 합쳐진다.
     const v = isRoom ? validateVision(src.vision) : { room: src.vision, dropped: [], fellBack: false };
-    this.built = buildRoom(v.room);
+    // 누가 놓아준 것이 있으면 이 공간에 함께 세운다 (game/effects.js — "방으로 가져다줄게")
+    const gifts = (this.placed ?? []).filter((p) => p.map === this.mapId);
+    const room = gifts.length
+      ? { ...v.room, objects: [...v.room.objects, ...gifts.map((g) => ({
+        type: g.type, position: 'center', size: 'medium', cleanable: false, placed: true, note: g.note,
+      }))] }
+      : v.room;
+    this.built = buildRoom(room);
     this.meta = { label: src.label, dropped: v.dropped, fellBack: v.fellBack };
     this.baseMessiness = this.built.messiness;
 
@@ -543,6 +553,7 @@ export class RoomScene extends Phaser.Scene {
    * 읽는 동안 생성이 끝나므로 기다림이 연출로 덮인다.
    */
   approachProp(p) {
+    const already = this.metProps.has(p.key);
     this.observer.act(p.key, `${this.placeLabel()}의 ${p.name}`, this.clock.label, 'approach');
     this.metProps.add(p.key);
     this.talkingProp = p;         // 자유 입력의 호감도가 누구에게 가는지
@@ -554,6 +565,17 @@ export class RoomScene extends Phaser.Scene {
     p.met = true;
 
     if (p.isMirror) { this.talkToMirror(p); return; }   // 마지막 장면은 다른 AI가 맡는다
+
+    // **두 번째부터는 그냥 대화다.** writer를 다시 부르면 오늘의 장면이 또 시작되고,
+    // 그건 처음 만난 것처럼 구는 것이다. 이어서 말을 거는 것이므로 npc-reply로 간다
+    if (already) {
+      this.dialogue.play(
+        { lines: [{ speaker: p.name, text: '…' }], choices: [], keepOpen: true },
+        () => {}, { pending: true, speaker: p.name, onGiveUp: () => this.endTalk() },
+      );
+      this.speak('(다시 말을 건다)', false);
+      return;
+    }
 
     // **찾아온 사람은 대본을 들고 왔다.** 정산 때 writer가 이미 써둔 것이라
     // 여기서 실시간 호출이 없다 — 다가가면 곧바로 말이 시작된다
@@ -777,9 +799,15 @@ export class RoomScene extends Phaser.Scene {
           this.chatLog.push({ speaker: l.speaker, text: l.text });
           this.dialogueLog.push({ at: this.clock.label, speaker: l.speaker, text: l.text, from: '채팅' });
         }
-        // **끝내는 건 플레이어만.** 답에 선택지가 없어도 대화창은 안 닫힌다
-        this.dialogue.continueWith({ ...out.data, keepOpen: true });
-        this.dialogue.onDone = (choice) => this.afterReply(choice, to);
+        // 말한 것이 실제로 일어난다 — 잠시 뒤에 (game/effects.js)
+        this.promise(out.data.effect);
+        // **이 사람도 대화를 끝낼 수 있다.** 플레이어만 끝낼 수 있으면 억지로 이어진다
+        const ends = out.data.ending === true;
+        this.dialogue.continueWith({ ...out.data, keepOpen: !ends, choices: ends ? [] : out.data.choices });
+        this.dialogue.onDone = (choice) => {
+          if (ends) { this.lastAction = `${to ?? '상대'} — 대화가 끝났다`; this.endTalk(); this.refresh(); return; }
+          this.afterReply(choice, to);
+        };
       })
       .catch((e) => {
         console.warn('[npc-reply]', e.message);
@@ -816,6 +844,52 @@ export class RoomScene extends Phaser.Scene {
   /** 지금 상대의 이름. 대화 중이 아니면 null */
   get partnerName() {
     return this.talkingWith?.name ?? null;
+  }
+
+  // ── 말한 것이 실제로 일어난다 ───────────────────────────
+  //
+  // "방으로 가져다 줄게" → 잠시 뒤 방에 밥상이 생긴다.
+  // 말이 말로만 끝나면 대화를 할 이유가 줄고, 이 게임은 대화를 받아내려고 만든 것이다.
+  //
+  // **곧바로 일어나지 않는다.** 말하자마자 물건이 생기면 마술이고,
+  // "이따 놓을게"는 이따 일어나야 약속이 된다 (game/effects.js).
+
+  /** 상대가 한 약속을 받아둔다. 코드가 못 알아먹는 건 조용히 버린다 */
+  promise(raw) {
+    const e = effects.accept(raw, {
+      maps: [...mapList(), 'room'],
+      npcs: NPC_IDS,
+      at: this.clock.minutes,
+    });
+    if (!e) return;
+    (this.pending ??= []).push(e);
+  }
+
+  /** 시각이 된 약속을 지킨다 */
+  keepPromises() {
+    if (!this.pending?.length) return;
+    const { ready, rest } = effects.due(this.pending, this.clock.minutes);
+    this.pending = rest;
+    for (const e of ready) this.apply(e);
+  }
+
+  apply(e) {
+    if (e.kind === 'give') {
+      this.bag = { ...this.bag, [e.item]: (this.bag[e.item] ?? 0) + 1 };
+      this.overlay.popNotice(`${itemLabel(e.item)}을(를) 받았다`);
+    } else if (e.kind === 'place') {
+      // 그 공간에 하나 놓인다. 지금 거기 서 있으면 눈앞에 생긴다
+      (this.placed ??= []).push({ map: e.map, type: e.what, note: e.note });
+      if (e.map === this.mapId) this.buildMap({ x: this.gx, y: this.gy });
+      this.overlay.popNotice(effects.line(e));
+    } else if (e.kind === 'move') {
+      // 그 사람이 그 공간으로 간다. 오늘 남은 시간 동안 거기 있다
+      (this.moved ??= []).push({ npc: e.who, map: e.map });
+      this.overlay.popNotice(effects.line(e));
+    }
+    this.lastAction = effects.line(e);
+    this.persist();
+    this.refresh();
   }
 
   // ── 찾아오는 사람 ───────────────────────────────────────
@@ -1011,6 +1085,25 @@ export class RoomScene extends Phaser.Scene {
 
     // 준 다음에 무슨 일이 생기는지는 AI가 쓴다. 여기 대사를 박지 않는다
     if (!p.met) this.approachProp(p);
+  }
+
+  /**
+   * 이 식탁에 밥이 차려져 있는가.
+   *
+   * 두 갈래 — 오늘 집에 차려진 것(residents.js mealAt), 또는 누가 놓아준 것(effects).
+   * 오늘 이미 먹었으면 없다.
+   */
+  hasMeal(obj) {
+    if (this.done.has(`${this.mapId}:${obj.id}`)) return false;
+    if (obj.placed) return true;                       // 누가 가져다준 밥상
+    return mealAt(this.mapId, this.clock.minutes, this.clock.day);
+  }
+
+  /** 밥을 먹는다. 허기가 크게 차고 L0 점수가 붙는다 */
+  eatMeal(obj) {
+    this.vitals = { ...this.vitals, hunger: Math.min(100, (this.vitals.hunger ?? 0) + 45) };
+    this.lastAction = '밥 먹기  +10';
+    this.persist();
   }
 
   /** 편의점 취식대 — 산 것을 여기서 먹는다. 살 곳과 먹을 곳이 같은 공간에 있다 */
@@ -1225,10 +1318,17 @@ export class RoomScene extends Phaser.Scene {
       const more = waiting > 1 ? `  외 ${waiting - 1}통` : '';
       return `${next.from}  "${next.preview}"${more}   [Space] 열기`;
     }
-    if (action && action.verb === 'look' && action.label !== '보기') {
-      return done ? `${nameOf(o)}   ✓ ${action.label}` : `${nameOf(o)}   [Space] ${action.label}`;
+    // **넘겨받은 행동을 그대로 쓴다.** 종류별로 특별 처리하면 새 행동이 생길 때마다
+    // 여기가 또 갈라진다 — 실제로 '사기'와 '밥 먹기'에서 두 번 겪었다
+    if (!action) return promptLine(o, done);
+    const name = nameOf(o);
+    if (action.verb === 'look') {
+      return done ? `${name}   ✓ ${action.label === '보기' ? '봤다' : action.label}`
+        : `${name}   [Space] ${action.label}`;
     }
-    return promptLine(o, done);
+    if (done) return `${name}   ✓ 오늘 완료`;
+    const what = action.short ?? action.label;
+    return `${name}   [Space] ${what}${action.score ? `  ${action.tier} +${action.score}` : ''}`;
   }
 
   /** 이 공간의 결. 사진에서 온 내 방은 언제나 실내다. */
@@ -1316,6 +1416,7 @@ export class RoomScene extends Phaser.Scene {
       this.lastAction = '자정이 지났다. 아직 자지 않았다';
       this.refresh();
     }
+    this.keepPromises();          // 누가 한 약속이 시각이 되면 일어난다
     this.vitals = tickVitals(this.vitals, this.clock.minutes - before);   // 표시용. 규칙엔 영향 없음
     this.overlay.drawHud(this.clock, this.todayScore, this.total, this.aiError, this.points);
     this.overlay.drawStatus(this.vitals, bagList(this.bag));
@@ -1429,8 +1530,12 @@ export class RoomScene extends Phaser.Scene {
       return {
         prop,
         obj: prop,
-        action: prop.met ? null : { key: prop.key, verb: 'approach', label: prop.name, short: '다가가기', tier: null, score: 0 },
-        done: prop.met,
+        // **한 번 말했다고 잠기지 않는다.** 다시 말을 걸 수 있어야 계속 털어놓는다.
+        // 두 번째부터는 '다시 말 걸기' — writer를 또 부르지 않고 곧장 대화로 간다
+        action: { key: prop.key, verb: 'approach', tier: null, score: 0,
+          label: prop.met ? `${prop.name}에게 다시` : prop.name,
+          short: prop.met ? '다시 말 걸기' : '다가가기' },
+        done: false,
         blocked: null,
       };
     }
@@ -1446,6 +1551,11 @@ export class RoomScene extends Phaser.Scene {
     if (action?.verb === 'look' && this.mapId === 'store') {
       if (obj.type === 'shelf') action = { ...action, label: `사기  (${this.points}P)` };
       else if (obj.type === 'table') action = { ...action, label: '먹기' };
+    }
+    // 집 식탁에 밥이 차려져 있으면 먹을 수 있다. 누가 놓아준 밥상도 마찬가지 —
+    // **부탁이 아니라 그냥 있는 것이다.** 먹어도 호감도는 안 오르고, 안 먹은 것은 관측에 남는다
+    if (obj.type === 'table' && this.hasMeal(obj)) {
+      action = { key: obj.id, verb: 'eat_meal', label: '밥 먹기', short: '먹기', tier: 'L0', score: 10 };
     }
     // 취침 시각 제한은 없앴다. 몇 시든 이불만 개어져 있으면 잘 수 있다 (clock.js SLEEP_ANYTIME)
     return {
@@ -1476,6 +1586,7 @@ export class RoomScene extends Phaser.Scene {
       this.endDay('sleep');
       return;
     }
+    if (t.action.verb === 'eat_meal') this.eatMeal(t.obj);   // 점수는 아래 공통 경로에서 붙는다
     if (t.action.verb === 'go_out') {
       this.travel(t.obj);
       return;
@@ -1936,8 +2047,11 @@ export class RoomScene extends Phaser.Scene {
         g.lineStyle(1, 0x4ade80, 0.5).strokeRect(x + 0.5, top + 0.5, w - 1, bottom - top - 1);
       }
       const pTop = ROOM_TOP + (this.gy + 1) * TILE - TILE * 1.5;
+      // **행동 이름을 여기서 다시 짓지 않는다.** `currentTarget()`이 정한 걸 쓴다 —
+      // "다가가기"가 여기 박혀 있어서 '다시 말 걸기'도 '주기'도 안 보였다.
+      // 라벨을 세 군데서 만들고 있었고, 그때마다 같은 버그가 났다
       this.drawLabel(
-        t.done ? `${t.prop.name}   ✓` : `${t.prop.name}   [Space] 다가가기`,
+        t.done ? `${t.prop.name}   ✓` : `${t.prop.name}   [Space] ${t.action?.short ?? '다가가기'}`,
         cx, Math.min(top, pTop) - 6
       );
       return;

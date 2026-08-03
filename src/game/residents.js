@@ -150,6 +150,24 @@ function pack(r) {
   };
 }
 
+/**
+ * 오늘 그 공간 식탁에 밥이 차려져 있는가.
+ *
+ * 사람과 같은 규칙으로 정한다 — 날짜 해시라 나갔다 와도 안 바뀐다.
+ * **엄마가 있는 날 더 자주 차려져 있다.** 밥은 저절로 생기지 않는다.
+ *
+ * 부탁이 아니라 그냥 있는 것이다 — 먹어도 호감도는 안 오른다.
+ * 안 먹고 지나친 것은 관측에 남는다(passed). 그게 이 게임이 보는 것이다.
+ */
+export function mealAt(mapId, minutes, day) {
+  if (mapId !== 'living') return false;
+  const withMom = roll(day, 'living', 'mom') < 0.6;
+  const h = Math.floor(minutes / 60) % 24;
+  const mealtime = (h >= 7 && h < 10) || (h >= 11 && h < 14) || (h >= 17 && h < 21);
+  if (!mealtime) return false;
+  return roll(day, 'living', 'meal') < (withMom ? 0.7 : 0.3);
+}
+
 /** 그 시각이 하루 중 어디쯤인지 한 마디. 프롬프트에 넘겨 대사 톤을 맞춘다 */
 export function timeBand(minutes) {
   const h = Math.floor(minutes / 60) % 24;

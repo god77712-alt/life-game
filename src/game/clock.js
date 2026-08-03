@@ -1,6 +1,9 @@
 // 게임 내 시계. DESIGN.md §1의 상수를 그대로 구현한다. 순수 모듈 — Phaser를 모른다.
 
-export const GAME_MIN_PER_REAL_SEC = 2;                        // 1 실제초 = 2 게임분
+// 1.5배로 올렸다 (2 → 3). 16시간 하루가 8분 → 5.3분.
+// **대화 중에는 시계가 멈추므로** 이 값이 조이는 건 걷고 행동하는 시간뿐이다.
+// 하루가 비어 보이는 진짜 이유는 속도가 아니라 할 게 없어서였고, 그건 따로 채운다
+export const GAME_MIN_PER_REAL_SEC = 3;                        // 1 실제초 = 3 게임분
 export const MS_PER_GAME_MIN = 1000 / GAME_MIN_PER_REAL_SEC;   // 게임 1분 = 500ms
 export const DAY_END = 24 * 60;      // 하루의 길이. 자정을 넘으면 25:00이 아니라 다음 날 01:00으로 읽는다
 export const DAY1_WAKE = 14 * 60;    // Day 1은 전날이 없으므로 14:00 고정

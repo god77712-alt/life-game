@@ -333,6 +333,25 @@ const REPLY_SCHEMA = obj({
   lines: arr(obj({ speaker: str(), text: str() })),
   choices: CHOICES,
   continue: { type: 'boolean' },                // 대화가 더 이어질 만한가
+  /**
+   * **이 사람이 대화를 끝낸다.** 사람은 무한히 붙잡혀 있지 않는다 —
+   * 할 말이 끝나면 "그래, 밥 챙겨 먹어" 하고 돌아선다.
+   * 이게 없으면 플레이어만 끝낼 수 있어서 대화가 억지로 이어진다.
+   */
+  ending: { type: 'boolean' },
+  /**
+   * 말한 것이 **실제로 일어난다.** "방으로 가져다줄게" → 방에 밥상이 생긴다.
+   * 코드가 실행할 수 있는 것만 받고 나머지는 조용히 버린다 (game/effects.js).
+   * 없으면 kind를 'none'으로.
+   */
+  effect: obj({
+    kind: str(['none', 'place', 'move', 'give']),
+    what: str(),        // place — 놓을 오브젝트 type
+    map: str(),         // place·move — 어느 공간에
+    who: str(),         // move — 누가 (인물 id)
+    item: str(),        // give — 어떤 물건
+    note: str(),        // 무슨 약속이었는지 한 줄
+  }),
 });
 
 // ── 레지스트리 ──────────────────────────────────────────────

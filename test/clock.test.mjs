@@ -5,51 +5,57 @@ import assert from 'node:assert/strict';
 
 import {
   Clock, fmt, wakeAfter, dayRealSeconds,
-  DAY_END, DAY1_WAKE, MS_PER_GAME_MIN, AWAKE_SPAN,
+  DAY_END, DAY1_WAKE, MS_PER_GAME_MIN, AWAKE_SPAN, GAME_MIN_PER_REAL_SEC,
 } from '../src/game/clock.js';
 
 const H = (h) => h * 60;
 
-test('환산율 — 1 실제초 = 2 게임분', () => {
+test('환산율 — 상수 그대로 흐른다', () => {
+  // 값을 다시 적지 않는다. 상수를 바꿔도 이 테스트는 그대로 맞아야 한다
+  const R = GAME_MIN_PER_REAL_SEC;
   const c = new Clock(H(8));
   c.advance(1000);                       // 1 실제초
-  assert.equal(Math.round(c.minutes - H(8)), 2);
-  c.advance(30_000);                     // 30 실제초 = 1 게임시간
-  assert.equal(Math.round(c.minutes - H(8)), 62);
+  assert.equal(Math.round(c.minutes - H(8)), R);
+  c.advance(29_000);                     // 총 30 실제초
+  assert.equal(Math.round(c.minutes - H(8)), R * 30);
 });
 
 test('DESIGN.md 하루 길이 표를 그대로 재현한다', () => {
   // 취침 → 기상 → 활동시간 → 실제 분
+  // 실제 분은 환산율에서 나온다. 표에는 게임 내 활동시간만 적는다
+  const real = (activeHours) => (activeHours * 60) / GAME_MIN_PER_REAL_SEC / 60;
   const table = [
-    [H(20), H(5), 19, 9.5],
-    [H(21), H(6), 18, 9.0],
-    [H(22), H(7), 17, 8.5],
-    [H(23), H(8), 16, 8.0],   // 기준선
-    [DAY_END, H(9), 15, 7.5], // 자정 강제 종료
+    [H(20), H(5), 19],
+    [H(21), H(6), 18],
+    [H(22), H(7), 17],
+    [H(23), H(8), 16],   // 기준선
+    [DAY_END, H(9), 15],
   ];
-  for (const [sleep, wake, activeHours, realMinutes] of table) {
+  for (const [sleep, wake, activeHours] of table) {
     assert.equal(wakeAfter(sleep), wake, `${fmt(sleep)} 취침 → 기상 시각`);
     assert.equal((DAY_END - wake) / 60, activeHours, `활동 ${activeHours}시간`);
-    assert.equal(dayRealSeconds(wake) / 60, realMinutes, `실제 ${realMinutes}분`);
+    assert.equal(dayRealSeconds(wake) / 60, real(activeHours), `실제 ${real(activeHours)}분`);
   }
 });
 
-test('Day 1은 14:00 기상 · 실제 5분', () => {
+test('Day 1은 14:00 기상 (10시간)', () => {
   const c = new Clock();
   assert.equal(c.day, 1);
   assert.equal(c.label, '14:00');
-  assert.equal(dayRealSeconds(DAY1_WAKE) / 60, 5);
+  assert.equal(dayRealSeconds(DAY1_WAKE) / 60, (10 * 60) / GAME_MIN_PER_REAL_SEC / 60);
 });
 
 test('자정은 하루를 끝내지 않는다 — 넘어가는 순간만 한 번 알린다', () => {
-  const c = new Clock(H(23));            // 60 게임분 남음 = 30 실제초
+  const c = new Clock(H(23));
   let hits = 0;
-  for (let i = 0; i < 40; i++) hits += c.advance(1000) ? 1 : 0;
+  const secs = 40;
+  for (let i = 0; i < secs; i++) hits += c.advance(1000) ? 1 : 0;
   assert.equal(hits, 1, '넘는 순간 딱 한 번');
   assert.ok(c.minutes > DAY_END, '시계는 멈추지 않고 계속 간다');
   assert.equal(c.running, true, '자정에 시계가 서면 안 된다');
   assert.equal(c.pastMidnight, true);
-  assert.equal(c.label, '00:20');        // 23:00 + 40실제초(=80게임분) = 24:20 → 00:20
+  // 23:00 + (40초 × 환산율)분. 상수를 바꿔도 맞아야 한다
+  assert.equal(c.label, fmt(H(23) + secs * GAME_MIN_PER_REAL_SEC));
 });
 
 test('멈춘 시계는 흐르지 않는다', () => {
