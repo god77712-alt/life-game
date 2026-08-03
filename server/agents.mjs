@@ -415,19 +415,40 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * 연결 끊김(status 없음)은 SDK 재시도를 넘겨도 가끔 나므로 여기서 한 겹 더 잡는다 —
  * 정산은 호출 4건이 이어져 있어 한 건만 실패해도 하루가 통째로 사라진다.
  */
+/**
+ * fast 모드를 쓸 수 있는 조직인가. **한 번 거절당하면 다시 안 쓴다.**
+ *
+ * 조직마다 fast 모드 한도가 따로 있고, **0인 조직이 있다.** 그러면 실시간 대사가
+ * 전부 429로 죽는다 — writer·npc-reply가 fast로 나가므로 NPC와의 대화가 통째로 사라진다.
+ * 실제로 그 상태로 배포했다. 켜놓고 그 경로를 한 번도 안 쳐본 탓이다.
+ *
+ * 속도는 있으면 좋은 것이지 없으면 안 되는 것이 아니다. 없으면 그냥 표준으로 간다.
+ */
+let fastAvailable = true;
+const isFastLimit = (err) =>
+  err?.status === 429 && /fast mode/i.test(err?.message ?? '');
+
 async function call(params, attempt = 0, fast = false) {
   const c = getClient();
+  const useFast = fast && fastAvailable;
   const betas = ['server-side-fallback-2026-07-01'];
   // 실시간 대사는 **속도가 곧 품질**이다 — 다가갔는데 10초를 기다리면 그게 게임의 인상이 된다.
   // fast 모드는 같은 모델을 더 빨리 뱉게 한다(값은 두 배지만 대사는 출력이 1천 토큰대다)
-  if (fast) betas.push('fast-mode-2026-02-01');
+  if (useFast) betas.push('fast-mode-2026-02-01');
   try {
     return await c.beta.messages.create({
       ...params,
-      ...(fast ? { speed: 'fast' } : {}),
+      ...(useFast ? { speed: 'fast' } : {}),
       betas, fallbacks: 'default',
     });
   } catch (err) {
+    // **fast 한도가 없는 조직이다.** 끄고 곧바로 다시 친다 — 대사가 사라지는 것보다
+    // 조금 느린 게 낫다. 이후 호출은 아예 안 붙인다
+    if (useFast && isFastLimit(err)) {
+      fastAvailable = false;
+      console.warn('[agents] fast 모드 한도 없음 — 표준 속도로 전환한다 (이후 호출 포함)');
+      return call(params, attempt, false);
+    }
     if (err?.status === 400) {
       console.warn('[agents] server-side fallback 사용 불가 — 폴백 없이 재시도');
       return await c.messages.create(params);
