@@ -149,25 +149,56 @@ export function settleLines(table, s = {}) {
     return out;
   }
 
-  // 맨 위 가설만 자세히. 나머지는 한 줄씩 —
-  // 디렉터가 여러 개를 놓고 재고 있다는 사실만 보이면 된다
-  const [top, ...rest] = list;
-  out.push(clip(hypoLabel(top), WIDTH));
-  // **센 것만.** 소수점은 없는 정밀도를 주장한다 (위 주석 참고)
-  out.push(top.status === 'confirmed'
-    ? `★ 확인됨 — ${counted(top, table?.confirm)}`
-    : clip(counted(top, table?.confirm), WIDTH));
-  // 왜 아직 확정이 아닌가 — 서버가 붙여준다(hypothesis.mjs missing). 첫 줄만 보인다
-  const block = top.missing?.[0];
-  if (block && top.status !== 'confirmed') out.push(clip(`남은 것 — ${block}`, WIDTH));
+  // **두 갈래를 나란히 보여준다.** 이 게임이 알아내려는 게 둘이고,
+  // 둘 다 차야 끝난다 — 하나만 보이면 진행이 절반만 보인다 (hypothesis.mjs AXES)
+  const top = { avoid: topOf(list, 'avoid'), want: topOf(list, 'want') };
 
-  for (const h of rest.slice(0, s.rest ?? 2)) {
+  for (const axis of ['avoid', 'want']) {
+    const h = top[axis];
+    if (!h) {
+      // 가설이 되기 전에도 analyst는 회피를 한 줄로 요약해 보낸다.
+      // **가설이 아니라는 걸 같이 적는다** — 검증 안 된 문장이 확정된 것처럼 보이면 안 된다
+      // **표시는 앞에 둔다.** 뒤에 붙이면 긴 문장에서 잘려나가고,
+      // 그러면 검증 안 된 소견이 확정된 가설처럼 보인다
+      out.push(axis === 'avoid' && table?.avoidance?.pattern
+        ? clip(`회피(가설 이전)  ${table.avoidance.pattern}`, WIDTH)
+        : `${AXIS_LABEL[axis]}  아직 없다`);
+      continue;
+    }
+    out.push(clip(`${AXIS_LABEL[axis]}  ${hypoLabel(h)}`, WIDTH));
+    // **센 것만.** 소수점은 없는 정밀도를 주장한다 (위 주석 참고)
+    out.push(h.status === 'confirmed'
+      ? `  ★ 확인됨 — ${counted(h, table?.confirm)}`
+      : clip(`  ${counted(h, table?.confirm)}`, WIDTH));
+  }
+
+  // 왜 아직 확정이 아닌가 — 서버가 붙여준다(hypothesis.mjs missing).
+  // **덜 찬 쪽 것만** 보인다. 둘 다 띄우면 정산창을 넘긴다.
+  // 덜 찬 쪽에 사유가 안 붙어 있으면(아직 얕아서) 다른 쪽 것이라도 보여준다 — 빈칸보다 낫다
+  const behind = [top.avoid, top.want]
+    .filter((h) => h && h.status !== 'confirmed' && h.missing?.[0])
+    .sort((a, b) => (a.confidence ?? 0) - (b.confidence ?? 0))[0];
+  if (behind) out.push(clip(`남은 것 — ${behind.missing[0]}`, WIDTH));
+
+  // 거울 인물이 섰으면 그것부터 알린다 — 회피가 확정됐다는 뜻이고,
+  // 플레이어 입장에선 "저 사람이 왜 계속 나오지"의 답이다
+  if (s.mirrorCast?.name) out.push(clip(`거울  ${s.mirrorCast.name} — ${s.mirrorCast.carries ?? ''}`, WIDTH));
+
+  const rest = list.filter((h) => h !== top.avoid && h !== top.want);
+  for (const h of rest.slice(0, s.rest ?? 1)) {
     out.push(clip(`· ${hypoLabel(h)}`, WIDTH));
   }
 
-  if (table?.avoidance?.pattern) out.push(clip(`회피  ${table.avoidance.pattern}`, WIDTH));
-
   return out;
+}
+
+/** 갈래 표시. 화면에서 둘이 구분돼야 진행이 절반만 보이지 않는다 */
+const AXIS_LABEL = { avoid: '회피', want: '바람' };
+
+/** 그 갈래에서 가장 앞선 가설. ranked가 이미 확정→confidence 순이다 */
+function topOf(list, axis) {
+  const want = (h) => (h.axis === 'avoid' ? 'avoid' : 'want');
+  return list.find((h) => want(h) === axis) ?? null;
 }
 
 // ── DEV 패널 ─────────────────────────────────────────────────

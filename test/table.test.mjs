@@ -99,11 +99,11 @@ const TABLE = {
   act: 2,
   hypotheses: [
     {
-      id: 'h1', label: '지훈 · 고양이 · 약속 없을 때', status: 'testing',
+      id: 'h1', axis: 'want', label: '지훈 · 고양이 · 약속 없을 때', status: 'testing',
       confidence: 0.45, verified_count: 1,
       missing: ['지훈에게 자기 얘기 0/1회', 'confidence 0.45 < 0.7'],
     },
-    { id: 'h2', label: '새벽 편의점 · 점원 없는 시간', status: 'forming', confidence: 0.2 },
+    { id: 'h2', axis: 'avoid', label: '새벽 편의점 · 점원 없는 시간', status: 'forming', confidence: 0.2 },
     { id: 'h3', label: '세 번째', status: 'forming', confidence: 0.2 },
   ],
   avoidance: { pattern: '응답이 돌아오는 상태를 피한다' },
@@ -114,7 +114,15 @@ test('며칠째고 뭐가 쌓였는지가 줄에 있다', () => {
   assert.match(out, /Act 2 {2}골 발견/);
   assert.match(out, /지훈 · 고양이 · 약속 없을 때/);
   assert.match(out, /남은 것 — 지훈에게 자기 얘기 0\/1회/, '왜 아직 확정이 아닌지가 보여야 한다');
-  assert.match(out, /회피 {2}응답이 돌아오는 상태를 피한다/);
+  assert.match(out, /회피 {2}새벽 편의점/, '두 갈래가 나란히 보여야 진행이 절반만 보이지 않는다');
+  assert.match(out, /바람 {2}지훈 · 고양이/);
+});
+
+test('회피 가설이 아직 없으면 요약을 대신 띄우되 **가설이 아니라고 적는다**', () => {
+  const t = { ...TABLE, hypotheses: [TABLE.hypotheses[0]] };
+  const out = settleLines(t).join('\n');
+  assert.match(out, /회피\(가설 이전\) {2}응답이 돌아오는/,
+    '검증 안 된 문장이 확정된 것처럼 보이면 안 된다');
 });
 
 test('**소수점을 안 띄운다** — 없는 정밀도를 주장하지 않는다', () => {
@@ -149,19 +157,26 @@ test('문턱은 서버가 보낸 값을 쓴다 — 화면이 다시 적으면 �
   assert.equal(/반응/.test(line), false, '서버가 안 보낸 겹은 안 그린다');
 });
 
-test('맨 위 가설만 자세히, 나머지는 한 줄씩', () => {
+test('갈래마다 맨 위 하나씩 자세히, 나머지는 한 줄씩', () => {
   const out = settleLines(TABLE);
   assert.match(out.join('\n'), /Act 2 {2}골 발견 · 가설 3/, '몇 개를 놓고 재는 중인지가 보인다');
-  assert.equal(out.filter((l) => l.startsWith('남은 것')).length, 1);
-  assert.ok(out.includes('· 새벽 편의점 · 점원 없는 시간'));
-  assert.ok(out.includes('· 세 번째'));
+  assert.equal(out.filter((l) => l.startsWith('남은 것')).length, 1,
+    '둘 다 띄우면 정산창을 넘긴다 — 덜 찬 쪽 하나만');
+  assert.ok(out.includes('· 세 번째'), '갈래 대표가 아닌 것은 한 줄로');
+});
+
+test('거울 인물이 섰으면 정산창에 나온다 — "저 사람이 왜 계속 나오지"의 답', () => {
+  const out = settleLines(TABLE, {
+    mirrorCast: { name: '벤치의 남자', carries: '날짜를 안 정한다' },
+  }).join('\n');
+  assert.match(out, /거울 {2}벤치의 남자 — 날짜를 안 정한다/);
 });
 
 test('중요한 것이 앞에 온다 — 뒤에서부터 잘려도 남게', () => {
   const out = settleLines(TABLE, { pending: true });
   assert.ok(out.indexOf('오늘 하루를 읽는 중…') < out.findIndex((l) => l.startsWith('회피')),
     '기다리는 화면에서는 "읽는 중"이 회피 문장보다 먼저다');
-  assert.ok(out.findIndex((l) => l.startsWith('Act ')) < out.indexOf('지훈 · 고양이 · 약속 없을 때'));
+  assert.ok(out.findIndex((l) => l.startsWith('Act ')) < out.findIndex((l) => l.startsWith('바람')));
 });
 
 test('확정된 가설에는 별이 붙고 "남은 것"이 사라진다', () => {

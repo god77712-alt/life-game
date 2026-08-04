@@ -23,6 +23,33 @@ export const CONFIRM = {
 };
 
 /**
+ * 가설은 **두 갈래다.** 알아내야 할 것이 둘이고, 각각이 만드는 것이 다르다.
+ *
+ *   avoid  무엇으로부터 자기를 지키고 있는가  →  거울 인물이 그 회피를 갖는다
+ *   want   무엇을 해보고 싶은가              →  골 맵이 그 무대로 열린다
+ *
+ * 한 갈래로 두면 둘 중 하나가 반드시 부속물이 된다. 실제로 그랬다 —
+ * 회피는 검증 없는 한 문장(`avoidance.pattern`)으로 떠 있었고, 바람은
+ * 8/1에 `desire`를 걷어내면서 통째로 사라졌다. 그래서 골 맵은 검증을 안 거친
+ * "자기 입으로 한 말"에서 바로 지어졌다.
+ *
+ * **자기 개방 조건은 갈래마다 다르다.** 바람은 그 사람에게 말을 해봐야 알 수 있지만,
+ * 회피는 **안 한 것**에서 읽힌다 — 안 갔고, 안 열었고, 화제를 돌렸다.
+ * 회피에 자기 개방을 요구하면 "말을 안 하는 것이 회피다"라는 가설이
+ * 영영 확정될 수 없다. 그건 논리가 아니라 순환이다.
+ *
+ * 그래서 회피가 먼저 차고, 바람이 나중에 찬다. 거울 인물이 중반에 등장해
+ * **응원할 시간이 생기는** 것도 이 순서 덕이다.
+ */
+export const AXES = {
+  avoid: { label: '회피', needsOpening: 0, makes: '거울 인물' },
+  want: { label: '바람', needsOpening: CONFIRM.needsOpening, makes: '골 맵' },
+};
+
+/** 갈래를 모르는 옛 가설은 바람으로 읽는다 — 조건이 더 빡빡한 쪽이 안전하다 */
+export const axisOf = (h) => (h?.axis === 'avoid' ? 'avoid' : 'want');
+
+/**
  * @param {object} h 가설
  * @param {number} [openedTo] 이 가설이 지목한 상대에게 자기 얘기를 한 횟수 (listening.js)
  * @returns {'dropped'|'confirmed'|'testing'|'forming'}
@@ -36,7 +63,8 @@ export function statusOf(h, openedTo = 0) {
   const verified = (h.verified_count ?? 0) >= CONFIRM.verifications;
   // 상대가 없으면 "혼자 하는 일"이다. 이 게임의 답이 될 수 없다
   const hasWho = !CONFIRM.needsWho || Boolean(h.who && h.who !== 'none');
-  const opened = openedTo >= CONFIRM.needsOpening;
+  // 회피는 안 한 것에서 읽힌다 — 자기 개방을 요구하면 순환이 된다 (AXES 주석)
+  const opened = openedTo >= AXES[axisOf(h)].needsOpening;
 
   if (confident && verified && layered && hasWho && opened) return 'confirmed';
   // 하나라도 만족하기 시작하면 검증 단계 — Act 2 진입 조건 (DESIGN.md §3)
@@ -66,18 +94,27 @@ export function applyStatus(analysis, told = []) {
   const opened = openedBy(told);
   const hypotheses = (analysis?.hypotheses ?? []).map((h) => ({
     ...h,
+    axis: axisOf(h),
     status: statusOf(h, opened.get(h.who) ?? 0),
     opened_to_who: opened.get(h.who) ?? 0,
   }));
-  const confirmed = hypotheses.find((h) => h.status === 'confirmed') ?? null;
+  const done = hypotheses.filter((h) => h.status === 'confirmed');
   const testing = hypotheses.filter((h) => h.status === 'testing');
+
+  // **갈래마다 따로 찬다.** 하나로 세면 회피만 두 개 확정돼도 골 맵이 열린다
+  const confirmedAvoid = done.find((h) => h.axis === 'avoid') ?? null;
+  const confirmedWant = done.find((h) => h.axis === 'want') ?? null;
 
   return {
     ...analysis,
     hypotheses,
-    confirmed,
+    // 회피가 차면 거울 인물이 세상에 나온다. 응원할 시간이 필요하므로 골 맵보다 먼저다
+    confirmedAvoid,
+    confirmedWant,
+    // 골 맵은 **둘 다** 찼을 때 열린다 — 무대(바람)에 그 사람(회피)이 서 있어야 한다
+    confirmed: confirmedAvoid && confirmedWant ? confirmedWant : null,
     // Act은 날짜가 아니라 가설 상태에 종속된다 (DESIGN.md §3)
-    act: confirmed ? 3 : testing.length ? 2 : 1,
+    act: confirmedAvoid && confirmedWant ? 3 : (testing.length || done.length) ? 2 : 1,
   };
 }
 
@@ -180,8 +217,9 @@ export function missing(h) {
   if (CONFIRM.needsWho && !(h.who && h.who !== 'none')) {
     out.push('상대가 없다 — 혼자 하는 일은 답이 아니다');
   }
-  if ((h.opened_to_who ?? 0) < CONFIRM.needsOpening) {
-    out.push(`${h.who && h.who !== 'none' ? h.who : '상대'}에게 자기 얘기 ${h.opened_to_who ?? 0}/${CONFIRM.needsOpening}회`);
+  const need = AXES[axisOf(h)].needsOpening;
+  if ((h.opened_to_who ?? 0) < need) {
+    out.push(`${h.who && h.who !== 'none' ? h.who : '상대'}에게 자기 얘기 ${h.opened_to_who ?? 0}/${need}회`);
   }
   if ((h.confidence ?? 0) < CONFIRM.confidence) {
     out.push(`confidence ${(h.confidence ?? 0).toFixed(2)} < ${CONFIRM.confidence}`);

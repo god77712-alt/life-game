@@ -254,6 +254,8 @@ export class RoomScene extends Phaser.Scene {
     this.collapseNext = false;
     this.mirrorTurn = 0;
     this.mirrorLog = [];
+    // 회피 가설이 확정된 날 디렉터가 세운다. 골 맵까지 같은 사람이 이어진다
+    this.mirrorCast = null;
     this.talkingWith = null;
     // 상대별 대화 이력. 하나로 쌓으면 A와의 대화가 B의 입력이 된다 (game/talk.js)
     this.chats = {};
@@ -287,6 +289,7 @@ export class RoomScene extends Phaser.Scene {
       this.realityDone = !!s.realityDone;
       this.mirrorTurn = s.mirrorTurn ?? 0;
       this.mirrorLog = s.mirrorLog ?? [];
+      this.mirrorCast = s.mirrorCast ?? null;
       this.sleptLastNight = s.sleptLastNight !== false;
       if (s.goal) this.registerGoal(s.goal);        // 골 맵이 열려 있었으면 문도 그대로
 
@@ -481,7 +484,8 @@ export class RoomScene extends Phaser.Scene {
       // **붙박이가 먼저 자리를 잡고, 디렉터의 오늘 무대가 그 위에 얹힌다.**
       // 순서가 이래야 AI가 죽어도 세상이 비지 않는다 (game/residents.js).
       // 같은 자리를 노리면 디렉터 쪽이 진다 — 오늘만의 장면이 더 귀하다
-      const fixed = residentsAt(this.mapId, this.clock.minutes, this.clock.day);
+      // 자리는 고정, **누구인지는 설문이 정한다** (casting → world.residents)
+      const fixed = residentsAt(this.mapId, this.clock.minutes, this.clock.day, this.world?.residents);
       const today = this.sceneHere()?.props ?? [];
       const taken = new Set(today.map((p) => p.slot));
       list = [...today, ...fixed.filter((r) => !taken.has(r.slot))];
@@ -1927,6 +1931,9 @@ export class RoomScene extends Phaser.Scene {
       errands: errands.summary(this.errands),
       // 인물별 호감도 + 그 사람에게 한 말 원문 — 고민(confide)을 지을 재료
       bonds: this.bonds(),
+      // 거울 인물 — **한 번 정해지면 계속 그 사람이다.** 안 돌려보내면
+      // 디렉터가 매일 새 사람을 세우고, 며칠에 걸쳐 쌓는다는 설계가 무너진다
+      mirrorCast: this.mirrorCast ?? null,
       places: this.placesForDirector(),
     };
 
@@ -1938,6 +1945,9 @@ export class RoomScene extends Phaser.Scene {
         if (out.error) throw new Error(out.error);
         this.table = out.analysis;
         this.plan = out.plan;
+        // 디렉터가 세웠거나 이어간 거울 인물. 없으면 어제 것을 그대로 둔다 —
+        // null로 덮으면 회피가 확정된 뒤에도 사람이 사라진다
+        if (out.plan?.mirror_cast?.name) this.mirrorCast = out.plan.mirror_cast;
         this.pendingScripts = out.scripts ?? [];
         this.pendingAmbient = ambientOverrides(out.plan?.ambient);
         this.settleUsage = out.total;

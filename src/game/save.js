@@ -41,6 +41,7 @@ export function snapshot(scene) {
     realityDone: !!scene.realityDone,
     mirrorTurn: scene.mirrorTurn ?? 0,
     mirrorLog: scene.mirrorLog ?? [],
+    mirrorCast: scene.mirrorCast ?? null,
     // **원문은 통째로 들고 간다.** 요약하면 말투가 사라지고, 말투가 사라지면
     // 거울이 그 사람을 안 닮는다 (CLAUDE.md)
     told: scene.observer?.told ?? [],

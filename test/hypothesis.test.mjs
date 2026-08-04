@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 
 import {
   statusOf, applyStatus, missing, CONFIRM, openedBy,
-  applyVerdicts, mergeAnalysis, MOVE, START_CONFIDENCE,
+  applyVerdicts, mergeAnalysis, MOVE, START_CONFIDENCE, AXES,
 } from '../server/hypothesis.mjs';
 
 const sig = (kind) => ({ day: 1, kind, evidence: 'x', reading: 'y' });
@@ -18,6 +18,10 @@ const full = {
   signals: ['language', 'reaction', 'behavior'].map(sig),
 };
 const OPENED = 1;   // statusOf의 두 번째 인자 — 그 상대에게 자기 얘기를 한 횟수
+
+// 두 갈래. 같은 다섯 조건을 채웠지만 **자기 개방 요구가 다르다**
+const want = { ...full, id: 'w', axis: 'want' };
+const avoid = { ...full, id: 'v', axis: 'avoid' };
 
 const told = (to = '지훈', n = 1) =>
   Array.from({ length: n }, () => ({ to, self: true, text: '나도 요즘 그래' }));
@@ -82,13 +86,57 @@ test('Act은 날짜가 아니라 가설 상태에 종속된다', () => {
   // 셋 중 하나만 걸려도 testing → Act 2 (여기서는 confidence만 넘긴 경우)
   assert.equal(applyStatus({ hypotheses: [{ confidence: 0.75, verified_count: 0, signals: [] }] }).act, 2);
   assert.equal(applyStatus({ hypotheses: [{ confidence: 0.1, verified_count: 2, signals: [] }] }).act, 2);
-  assert.equal(applyStatus({ hypotheses: [full] }, told()).act, 3, 'confirmed면 Act 3');
+  // **한 갈래만 차면 아직 Act 2다.** 무대(바람)에 그 사람(회피)이 서 있어야 골 맵이 성립한다
+  assert.equal(applyStatus({ hypotheses: [want] }, told()).act, 2, '바람만 차면 아직');
+  assert.equal(applyStatus({ hypotheses: [avoid] }, told()).act, 2, '회피만 차도 아직');
+  assert.equal(applyStatus({ hypotheses: [avoid, want] }, told()).act, 3, '둘 다 차야 Act 3');
 });
 
 test('confirmed 가설을 찾아 넘긴다', () => {
-  const out = applyStatus({ hypotheses: [{ id: 'a', signals: [] }, { id: 'b', ...full }] }, told());
-  assert.equal(out.confirmed.id, 'b');
+  const out = applyStatus({ hypotheses: [{ id: 'a', signals: [] }, { ...avoid, id: 'b' }, { ...want, id: 'c' }] }, told());
+  assert.equal(out.confirmed.id, 'c', '골 맵을 여는 것은 바람 쪽이다');
+  assert.equal(out.confirmedAvoid.id, 'b');
   assert.equal(out.hypotheses[0].status, 'forming');
+});
+
+// ── 두 갈래 ─────────────────────────────────────────────────
+//
+// 알아내야 할 것이 둘이고, 각각이 만드는 것이 다르다.
+//   avoid → 거울 인물이 그 회피를 갖는다   ·   want → 골 맵이 그 무대로 열린다
+
+test('**갈래마다 따로 찬다** — 회피 둘이 확정돼도 골 맵은 안 열린다', () => {
+  const out = applyStatus({ hypotheses: [{ ...avoid, id: 'a1' }, { ...avoid, id: 'a2' }] }, told());
+  assert.ok(out.confirmedAvoid, '거울은 나온다');
+  assert.equal(out.confirmedWant, null);
+  assert.equal(out.confirmed, null, '무대가 없는데 골 맵을 열면 8/1의 그 실패로 돌아간다');
+});
+
+test('**회피는 자기 얘기를 안 해도 확정된다** — 안 한 것에서 읽히기 때문', () => {
+  // 그 사람에게 한 번도 자기 얘기를 안 했다
+  assert.equal(statusOf(avoid, 0), 'confirmed');
+  assert.notEqual(statusOf(want, 0), 'confirmed', '바람은 말을 해봐야 안다');
+  assert.equal(statusOf(want, 1), 'confirmed');
+});
+
+test('그래서 거울이 골 맵보다 먼저 열린다 — 응원할 시간이 생긴다', () => {
+  assert.ok(AXES.avoid.needsOpening < AXES.want.needsOpening,
+    '순서가 뒤집히면 거울 인물이 마지막에나 나온다');
+});
+
+test('회피에도 상대가 필요하다 — "사람이 무섭다"는 검증할 수 없다', () => {
+  assert.notEqual(statusOf({ ...avoid, who: 'none' }, 0), 'confirmed');
+});
+
+test('갈래를 안 밝힌 옛 가설은 바람으로 읽는다 — 빡빡한 쪽이 안전하다', () => {
+  const old = { ...want };
+  delete old.axis;
+  assert.notEqual(statusOf(old, 0), 'confirmed', '조건을 느슨하게 풀어주면 안 된다');
+  assert.equal(applyStatus({ hypotheses: [old] }, told()).hypotheses[0].axis, 'want');
+});
+
+test('missing이 갈래에 맞는 것만 짚는다', () => {
+  assert.deepEqual(missing({ ...avoid, opened_to_who: 0 }), [], '회피에 자기 얘기를 요구하면 순환이다');
+  assert.ok(missing({ ...want, opened_to_who: 0 }).some((s) => s.includes('자기 얘기')));
 });
 
 test('missing은 부족한 조건만 정확히 짚는다', () => {

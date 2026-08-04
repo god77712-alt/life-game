@@ -61,6 +61,7 @@ const RESIDENTS = {
     {
       // 엄마가 없는 날엔 쪽지가 남아 있다. **빈 거실을 만들지 않는다**
       npc: null, name: '엄마가 남긴 쪽지', look: 'object', slot: 'a', fallbackFor: 'mom',
+      nameFor: (n) => `${n}가 남긴 쪽지`,
       detail: '식탁 위에 쪽지가 접혀 있다.',
     },
   ],
@@ -140,7 +141,7 @@ export function isAnimal(npc) {
  * @returns {Array<{npc:string|null, name:string, look:string, slot:string, detail:string,
  *                  wants?:string[], resident:true}>}
  */
-export function residentsAt(mapId, minutes, day) {
+export function residentsAt(mapId, minutes, day, who = null) {
   const list = RESIDENTS[mapId] ?? [];
   const out = [];
   const present = new Set();
@@ -149,20 +150,48 @@ export function residentsAt(mapId, minutes, day) {
     if (r.fallbackFor) continue;                    // 대체물은 아래에서 따로
     if (roll(day, mapId, r.npc ?? r.name) >= r.chance(minutes)) continue;
     present.add(r.npc);
-    out.push(pack(r));
+    out.push(pack(r, who));
   }
 
   // 없는 사람의 자리를 대신할 것 (엄마 → 쪽지)
   for (const r of list) {
     if (!r.fallbackFor || present.has(r.fallbackFor)) continue;
     if (out.some((o) => o.slot === r.slot)) continue;
-    out.push(pack(r));
+    out.push(pack(r, who));
   }
 
   return out;
 }
 
-function pack(r) {
+/**
+ * **자리는 고정, 누구인지는 설문이 정한다.**
+ *
+ * 이 파일이 정하는 건 "거실에 같이 사는 사람이 있다"까지다. 그 사람이
+ * 엄마인지 누나인지 할머니인지는 이 게임이 알 바가 아니라 **그 플레이어의 사정**이고,
+ * `casting`이 설문에서 읽어 `world.residents`에 적어 보낸다.
+ *
+ * id는 안 바꾼다 — 호감도 서랍(mom 100 고정)·부탁·식사 판정이 전부 id에 매여 있고,
+ * 이름 때문에 그것들이 흔들리면 안 된다. **바뀌는 건 부르는 이름과 첫 줄뿐이다.**
+ *
+ * 붙박이 자체를 없애지 않는 이유: 배포본 키가 죽었던 나흘 동안 세상에 아무도 없었다.
+ * 디렉터가 유일한 공급원이면 AI가 한 번 실패할 때 게임이 통째로 빈다.
+ *
+ * @param {Record<string,{name?:string, detail?:string}>|null} who `world.residents`
+ */
+function named(r, who) {
+  // 대체물(쪽지)은 자기 id가 없다. **대신하는 사람의 이름을 따라가야 한다** —
+  // 안 그러면 같이 사는 사람이 누나인데 '엄마가 남긴 쪽지'가 놓인다
+  if (r.fallbackFor) {
+    const of = who?.[r.fallbackFor]?.name;
+    return of ? { ...r, name: r.nameFor(of) } : r;
+  }
+  const over = who?.[r.npc];
+  if (!over) return r;
+  return { ...r, name: over.name || r.name, detail: over.detail || r.detail };
+}
+
+function pack(r0, who) {
+  const r = named(r0, who);
   return {
     npc: r.npc ?? null,
     name: r.name,

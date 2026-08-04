@@ -115,25 +115,36 @@ const SIGNAL = obj({
 /**
  * 분석 — 가설 테이블. status는 코드가 정한다(hypothesis.mjs). 모델은 근거만 낸다.
  *
- * **가설의 형태가 바뀌었다.** 예전에는 (무엇에 끌리는가) 하나였고,
- * 그래서 '고양이에게 밥 주기' 같은 혼자 하는 일이 confirmed를 가져갔다.
- * 이 게임의 목표는 취향을 알아내는 게 아니라 **이 사람이 누군가에게 자기 얘기를 하는 것**이다.
- * 그러니 가설은 취향이 아니라 **입이 열리는 조건**이어야 한다 — 누구에게, 무엇을 매개로, 언제.
+ * **가설은 두 갈래다.** 이 게임이 알아내야 할 것이 둘이기 때문이다:
+ *
+ *   axis: 'avoid'  무엇으로부터 자기를 지키고 있는가  →  거울 인물이 그 회피를 갖는다
+ *   axis: 'want'   무엇을 해보고 싶은가              →  골 맵이 그 무대로 열린다
+ *
+ * 예전에는 갈래가 하나였고 그 하나가 '무엇에 끌리는가'였다. 그래서
+ * '고양이에게 밥 주기' 같은 혼자 하는 일이 confirmed를 가져갔다.
+ * 걷어내면서 이번엔 **바람 자체가 사라졌고**, 회피는 검증 없는 한 문장으로 떠 있었다.
+ *
+ * 그래서 둘 다 정식 가설로 세운다. 둘 다 `who`를 요구하고(혼자 하는 일은 답이 아니다),
+ * 둘 다 referee가 채점한다. 다만 자기 개방 조건은 갈래마다 다르다 — AXES 주석 참고.
  */
 const ANALYSIS_SCHEMA = obj({
   hypotheses: arr(obj({
     id: str(),
+    axis: str(['avoid', 'want']),   // ★ 어느 갈래인가
     label: str(),               // 짧은 이름. '지훈 · 고양이 화제 · 약속 없을 때'
-    who: str(),                 // ★ 누구에게 열리는가. cast의 이름, 아직 모르면 'none'
+    who: str(),                 // ★ 누구 앞에서(avoid) / 누구와·누구에게 보이고(want). 모르면 'none'
     through: str(),             // 무엇을 매개로 (화제·사물·동물). 없으면 'none'
     when: str(),                // 어떤 상황·시간에
-    statement: str(),           // 위 셋을 합친 **검증 가능한** 한 문장
+    statement: str(),           // 위를 합친 **검증 가능한** 한 문장
+    // ── 아래 둘은 갈래마다 하나씩만 채운다 ──
+    protects: str(),            // avoid — 그 회피가 무엇을 막아주고 있는가. want면 'none'
+    instead: str(),             // want  — 그 바람을 지금 무엇으로 대신하고 있는가. avoid면 'none'
     // confidence·verified_count는 여기 없다 — referee 판정에 따라 코드가 움직인다
     signals: arr(SIGNAL),
     dropped: { type: 'boolean' },
   })),
   avoidance: obj({
-    pattern: str(),             // 회피 패턴 한 문장
+    pattern: str(),             // 회피 패턴 한 문장 — 화면 표시용 요약. 판정은 avoid 가설이 한다
     evidence: arr(str()),
   }),
   note: str(),                  // 디렉터에게 넘기는 한 줄 소견
@@ -155,6 +166,12 @@ const VERDICT_SCHEMA = obj({
   })),
 });
 
+/** 붙박이 한 사람. 이름과 첫 줄만 — 대사는 여기서 쓰지 않는다 */
+const RESIDENT_WHO = obj({
+  name: str(),      // 플레이어가 부를 이름. '엄마' '누나' '할머니' '아저씨'
+  detail: str(),    // 다가가면 보이는 것 한 줄. 판단 없이 본 것만
+});
+
 // 캐스팅 — 무대만. 욕망·회피 필드가 아예 없다(가설은 행동에서 읽는다).
 const CASTING_SCHEMA = obj({
   world: obj({
@@ -174,6 +191,20 @@ const CASTING_SCHEMA = obj({
     presence: str(),
     pressure: str(),
   })),
+  /**
+   * **공간에 원래 있는 사람들이 누구인가.**
+   *
+   * 자리는 코드가 정한다 — 거실에 같이 사는 사람이 있고, 편의점엔 점원이 있고,
+   * 공원엔 아는 사람이 있다. 그건 세상의 모양이라 안 바뀐다(`game/residents.js`).
+   * 그런데 **그게 엄마인지 누나인지 할머니인지는 이 사람의 사정**이고, 설문에만 있다.
+   *
+   * id는 안 바꾼다(호감도·부탁·식사 판정이 전부 id에 매여 있다). 이름만 바뀐다.
+   */
+  residents: obj({
+    mom: RESIDENT_WHO,       // 거실 — 같이 사는 사람
+    friend: RESIDENT_WHO,    // 공원 — 아는 사람
+    clerk: RESIDENT_WHO,     // 편의점 — 매번 보는 남
+  }),
   texture: str(),           // 주의가 향하는 결. 어디를 먼저 건드려볼지에만 쓴다 — 가설 아님
   gap_note: str(),          // 실제 나이 ↔ 플레이 나이 간극. 가설이 아니라 메모다
 });
@@ -248,6 +279,24 @@ const CAST_STATE_SCHEMA = arr(obj({
   since: { type: 'integer' },   // 며칠째인가 (day)
 }));
 
+/**
+ * 거울 인물 — **회피 가설이 확정된 뒤에 나타나는 한 사람.**
+ *
+ * 플레이어의 회피를 자기 것으로 갖고 있고, 자기가 무엇의 거울인지 모른다.
+ * 플레이어는 며칠에 걸쳐 그를 응원하게 되고, **그에게 해준 말이 골 맵에서 자기에게 돌아온다.**
+ *
+ * 회피를 남 일로 먼저 풀게 하는 장치다 — 자기 문제로 직접 들이대면 문이 닫힌다.
+ * 그래서 골 맵에서 한 번 만나는 걸로는 안 되고, 관계가 쌓일 시간이 필요하다.
+ * (회피 가설이 바람 가설보다 먼저 차도록 되어 있는 이유 — hypothesis.mjs AXES)
+ */
+const MIRROR_CAST_SCHEMA = obj({
+  name: str(),          // 이 인물의 이름. **한 번 정하면 안 바꾼다**
+  relation: str(),      // 플레이어와 어떻게 아는 사이가 됐나
+  carries: str(),       // 그가 가진 회피. 플레이어의 것과 같은 것이되 사연은 그의 것
+  progress: str(),      // 지금 어디까지 왔나. 며칠에 걸쳐 조금씩 움직인다
+  told: { type: 'boolean' },   // 자기 사정을 이미 꺼냈는가. 처음엔 그냥 아는 사람이다
+});
+
 // 편성 — 무엇을 언제 왜 던질지 + 오늘의 무대
 const PLAN_SCHEMA = obj({
   pacing: str(['순조로움', '늘어짐', '정체']),
@@ -256,6 +305,7 @@ const PLAN_SCHEMA = obj({
   scenes: SCENE_SCHEMA,
   errands: ERRAND_SCHEMA,
   cast_state: CAST_STATE_SCHEMA,
+  mirror_cast: MIRROR_CAST_SCHEMA,
   events: arr(obj({
     id: str(),
     at: str(),                                  // "10:30" 게임 내 시각
@@ -382,13 +432,16 @@ export const AGENTS = {
   },
   analyst: {
     role: '사용자 분석 — 행동·대화에서 회피 패턴과 숨은 욕망을 읽는다 (점수는 안 매긴다)',
-    prompt: 'analyst', schema: ANALYSIS_SCHEMA, effort: 'high', maxTokens: 12000,
+    // 두 갈래(avoid·want)에 protects·instead까지 붙으면서 출력이 커졌다 —
+    // 12000에서 DAY 3이 잘렸다. 잘리면 그날 분석이 통째로 날아간다
+    prompt: 'analyst', schema: ANALYSIS_SCHEMA, effort: 'high', maxTokens: 20000,
     vars: ['day', 'table', 'today', 'dialogue', 'observed'],
   },
   director: {
     role: '편성 — 내일 무엇을 언제 왜 던질지 정한다',
-    prompt: 'director', schema: PLAN_SCHEMA, effort: 'high', maxTokens: 14000,
-    vars: ['day', 'world', 'table', 'analysis', 'history', 'places', 'cast', 'errands', 'bonds'],
+    // mirror_cast가 붙었다. 같은 이유로 여유를 둔다
+    prompt: 'director', schema: PLAN_SCHEMA, effort: 'high', maxTokens: 18000,
+    vars: ['day', 'world', 'table', 'analysis', 'history', 'places', 'cast', 'errands', 'bonds', 'mirror'],
   },
   writer: {
     role: '집필 — 편성 1건을 실제 대사와 선택지로 만든다',
@@ -398,7 +451,7 @@ export const AGENTS = {
   'goal-map': {
     role: '골 맵 — **이 사람이 자기 입으로 한 말**에서 마지막 장소와 거울을 짓는다 (게임당 1회)',
     prompt: 'goal-map', schema: GOAL_SCHEMA, effort: 'high', maxTokens: 12000,
-    vars: ['disclosed', 'confirmed', 'avoidance', 'world', 'typed'],
+    vars: ['disclosed', 'confirmed', 'avoid', 'mirrorCast', 'avoidance', 'world', 'typed'],
   },
   mirror: {
     role: '거울 — 골 맵의 인물이 플레이어와 나누는 마지막 대화 (실시간)',
@@ -449,6 +502,10 @@ let fastAvailable = true;
 const isFastLimit = (err) =>
   err?.status === 429 && /fast mode/i.test(err?.message ?? '');
 
+/** 크레딧 소진. 키는 멀쩡한데 돈이 없는 것이라 재시도로 안 풀린다 */
+const isBilling = (err) =>
+  err?.status === 400 && /credit balance|billing/i.test(err?.message ?? '');
+
 async function call(params, attempt = 0, fast = false) {
   const c = getClient();
   const useFast = fast && fastAvailable;
@@ -469,6 +526,13 @@ async function call(params, attempt = 0, fast = false) {
       fastAvailable = false;
       console.warn('[agents] fast 모드 한도 없음 — 표준 속도로 전환한다 (이후 호출 포함)');
       return call(params, attempt, false);
+    }
+    // **크레딧이 떨어진 것은 재시도로 안 풀린다.** 폴백 없이 다시 쳐봐야 같은 400이고,
+    // 그동안 health는 초록이라 화면에는 아무 문제가 없어 보인다 — 배포본 키가 죽었던
+    // 나흘과 같은 모양이다. 키 판정을 그 자리에서 무효화해 health가 곧바로 붉어지게 한다
+    if (isBilling(err)) {
+      keyCheck = { at: Date.now(), ok: false, error: '크레딧 잔액이 부족하다 (Plans & Billing)' };
+      throw err;
     }
     if (err?.status === 400) {
       console.warn('[agents] server-side fallback 사용 불가 — 폴백 없이 재시도');

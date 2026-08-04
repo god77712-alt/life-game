@@ -289,7 +289,12 @@ async function runSettle(body) {
       const g = await runAgent('goal-map', {
         // 없으면 없다고 말한다. 있는 척하면 모델이 사연을 지어낸다
         disclosed: disclosed.length ? disclosed : '(자기 얘기가 한 줄도 없다 — 재료가 얇다)',
+        // 무대는 **바람**에서 나온다 (axis: want)
         confirmed: analysis.confirmed,
+        // 거기 서 있는 사람은 **회피**에서 나온다 (axis: avoid).
+        // 며칠간 플레이어가 응원해온 그 사람이다 — 여기서 처음 나오는 인물이 아니다
+        avoid: analysis.confirmedAvoid,
+        mirrorCast: body.mirrorCast ?? null,
         avoidance: analysis.avoidance,
         world,
         typed: told.map((t) => t.text).filter(Boolean),
@@ -307,10 +312,19 @@ async function runSettle(body) {
   //    무대는 다시 짜면 되지만 그날의 판정(특히 confirmed)은 그날의 기록에서만 나온다.
   //    한 번 편성 절단 때문에 confirmed 하루를 통째로 잃은 적이 있다.
   try {
+    // ★ 거울 인물 — **회피 가설이 확정되면 그때부터 세상에 있다.**
+    //   골 맵에서 처음 만나면 응원할 시간이 없다. 회피가 바람보다 먼저 차도록
+    //   되어 있는 게(AXES) 이 사람에게 며칠을 주기 위해서다.
+    //   한 번 생기면 이름을 안 바꾼다 — 어제 것을 그대로 넘겨 이어가게 한다
+    const mirror = analysis.confirmedAvoid
+      ? { avoid: analysis.confirmedAvoid, cast: body.mirrorCast ?? null }
+      : null;
+
     const d = await runAgent('director', {
       day, world, table: withMissing, analysis: a.data.note, history, places, cast, bonds,
       // 어제 뭘 부탁했고 뭘 안 했는지. 같은 걸 또 시킬지 말지는 디렉터가 정한다
       errands,
+      mirror,
     });
     usage.push(d.usage);
 
