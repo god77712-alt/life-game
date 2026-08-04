@@ -87,7 +87,7 @@ const RESIDENTS = {
       wants: ['blanket', 'onigiri'],
     },
     {
-      npc: 'cat', name: '길고양이', look: 'animal', slot: 'c',
+      npc: 'cat_park', name: '공원 고양이', look: 'animal', slot: 'c',
       chance: () => 0.5,
       detail: '수풀 아래에서 이쪽을 본다. 다가가면 물러선다.',
       wants: ['catfood'],
@@ -95,14 +95,41 @@ const RESIDENTS = {
   ],
   street: [
     {
-      // 골목의 고양이는 공원 것과 다른 개체다 — 날짜 해시가 따로 굴러간다
-      npc: 'cat', name: '길고양이', look: 'animal', slot: 'a',
+      // **골목의 고양이는 공원 것과 다른 개체다.** 그런데 한동안 둘 다 `npc: 'cat'`이라
+      // 호감도 서랍을 같이 썼다 — 공원 고양이에게 사료를 주면 골목 고양이도 같이 올랐다.
+      // 날짜 해시만 나누고 id를 안 나눠서 생긴 일이다. 다른 개체면 id도 달라야 한다
+      npc: 'cat_alley', name: '골목 고양이', look: 'animal', slot: 'a',
       chance: (min) => (isDaytime(min) ? 0.35 : 0.7),   // 밤에 더 자주 나온다
       detail: '담 밑에서 웅크리고 있다. 며칠은 굶은 것 같다.',
       wants: ['catfood'],
     },
   ],
 };
+
+/**
+ * **이 게임의 유일한 인물 명단.**
+ *
+ * 예전엔 씬에도 같은 표가 두 벌 더 있었다(`NPC_IDS`, `NPC_NAME_TO_ID`).
+ * 그래서 고양이를 두 마리로 나눌 때 세 군데를 고쳐야 했고, 한 군데를 놓치면
+ * 부탁이 조용히 버려지거나 찾아온 사람을 못 알아봤다. 명단은 여기 하나다.
+ */
+export const ROSTER = Object.values(RESIDENTS)
+  .flat()
+  .filter((r) => r.npc)
+  .map((r) => ({ npc: r.npc, name: r.name, look: r.look }));
+
+/** 부탁을 할 수 있는 사람들. 여기 없는 id로 온 부탁은 버려진다 */
+export const NPC_IDS = ROSTER.map((r) => r.npc);
+
+/** 이름으로 호감도 키를 찾는다. 찾아온 사람이 아는 사람인지 알아보는 데 쓴다 */
+export function idOfName(name) {
+  return ROSTER.find((r) => r.name === name)?.npc ?? null;
+}
+
+/** 사람이 아닌 것(동물)인가. 말투·관계 설명이 달라진다 */
+export function isAnimal(npc) {
+  return ROSTER.find((r) => r.npc === npc)?.look === 'animal';
+}
 
 /**
  * 지금 이 공간에 있는 붙박이들.

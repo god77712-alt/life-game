@@ -7,7 +7,8 @@ import { MOCK_ROOMS } from '../room/mock.js';
 import { MAPS, ROOM_EXIT, returnWall, GOAL_ID, registerGoalMap, clearGoalMap, mapList, freeSpots } from '../game/maps.js';
 import { actionFor, potentialScore, promptLine, nameOf } from '../game/actions.js';
 import { Clock, fmt } from '../game/clock.js';
-import { residentsAt, timeBand, mealAt } from '../game/residents.js';
+import { residentsAt, timeBand, mealAt, NPC_IDS, idOfName, isAnimal } from '../game/residents.js';
+import * as talk from '../game/talk.js';
 import { initialAffinity, raise, affinityLines, affinityOf } from '../game/affinity.js';
 import { ITEMS, POINT_PER_SCORE, buy, take, has, bagList, wantedFrom, itemLabel } from '../game/shop.js';
 import * as errands from '../game/errands.js';
@@ -28,14 +29,8 @@ import { Ending } from '../ui/ending.js';
 import { Touch } from '../ui/touch.js';
 import { TILE, ROOM_TOP, buildBaseTextures, objectTexture, THEMES } from '../render/textures.js';
 
-/** 부탁을 할 수 있는 사람들. 여기 없는 id로 온 부탁은 버려진다 (game/residents.js와 같은 키) */
-const NPC_IDS = ['mom', 'clerk', 'friend', 'homeless', 'cat'];
-
-/** 붙박이 이름 → 호감도 키. 찾아온 사람이 그 사람인지 알아보는 데 쓴다 */
-const NPC_NAME_TO_ID = { 엄마: 'mom', 친구: 'friend', 노숙자: 'homeless', 길고양이: 'cat', '편의점 알바생': 'clerk' };
-
-/** 채팅 이력을 몇 턴까지 기억하나. 짧으면 상대가 방금 한 말을 잊는다 */
-const CHAT_MEMORY = 40;
+// 인물 명단(NPC_IDS·이름↔id·동물 여부)은 **residents.js가 유일한 출처다.**
+// 여기 표를 한 벌 더 두면 사람을 늘리거나 나눌 때 반드시 한쪽을 놓친다.
 
 const STEP_MS = 160;                          // 한 칸 이동 시간 (ART.md §3)
 const DIRS = {
@@ -199,13 +194,37 @@ export class RoomScene extends Phaser.Scene {
     return true;
   }
 
+  /**
+   * 점수를 준다. **점수가 붙는 자리는 여기 하나다.**
+   *
+   * 예전엔 세 군데가 각자 더했고, 그중 이동(`travel`)만 포인트를 안 붙였다 —
+   * 편의점에 가는 +30이 0P였다. 같은 규칙을 세 벌 적으면 한 벌은 반드시 어긋난다.
+   *
+   * @param {number} score 이미 scoreFor를 거친 값 (붕괴 이후엔 0)
+   * @param {{label:string, tier:string}} how 정산창에 남을 이름
+   * @returns {number} 준 점수. 부르는 쪽이 팝업 자리를 정할 수 있게
+   */
+  award(score, how) {
+    this.todayScore += score;
+    this.total += score;
+    // 점수와 **같이** 포인트가 들어온다. 점수는 기록으로 남고, 포인트는 쓰면 준다 (game/shop.js).
+    // **누적 점수는 절대 안 깎인다** — 붕괴날의 `오늘 +0`이 그 위에서만 성립한다
+    this.points += score * POINT_PER_SCORE;
+    this.todayLog.push({ label: how.label, tier: how.tier, score });
+    this.lastAction = `${how.label}  +${score}`;
+    return score;
+  }
+
+  /** 점수가 뜨는 자리는 행동마다 다르다 — 사물 위, 또는 서 있는 자리 */
+  popScoreAt(x, y, score) {
+    this.overlay.popScore(x, y, score);
+  }
+
   /** 현실에서 실제로 했다. **이 게임에서 점수가 붙는 마지막 행동** (DESIGN.md §2 R). */
   passReality(score, verdict) {
     this.realityDone = true;
-    this.total += score;                       // scoreFor를 안 거친다 — 붕괴가 막지 못하는 유일한 점수
-    this.todayScore += score;
-    this.todayLog.push({ label: '현실 — 이불 개기 (사진 인증)', tier: 'R', score });
-    this.lastAction = `현실 이불 개기  +${score}`;
+    // scoreFor를 안 거친다 — 붕괴가 막지 못하는 유일한 점수
+    this.award(score, { label: '현실 — 이불 개기 (사진 인증)', tier: 'R' });
     this.dialogueLog.push({ at: this.clock.label, from: '현실', saw: verdict?.saw ?? '', score });
     this.overlay.popScore(this.gx * TILE + TILE / 2, ROOM_TOP + (this.gy + 1) * TILE - 6, score);
     this.overlay.drawHud(this.clock, this.todayScore, this.total, this.aiError, this.points);
@@ -235,6 +254,9 @@ export class RoomScene extends Phaser.Scene {
     this.collapseNext = false;
     this.mirrorTurn = 0;
     this.mirrorLog = [];
+    this.talkingWith = null;
+    // 상대별 대화 이력. 하나로 쌓으면 A와의 대화가 B의 입력이 된다 (game/talk.js)
+    this.chats = {};
     this.goal = null;
     this.plan = null;
     this.aiError = null;
@@ -499,8 +521,7 @@ export class RoomScene extends Phaser.Scene {
       // 원하던 자리로 만들면 둘이 같은 키를 갖는 날이 생긴다
       const key = `${this.mapId}:prop:${slot.id}`;
       this.propNames.set(key, p.name);                           // 관측 기록에 이름으로 남게
-      this.props.push({ ...p, look, key, x: slot.x, y: slot.y, w: 1, h: 1, sprite,
-        met: this.metProps.has(key) });
+      this.props.push({ ...p, look, key, x: slot.x, y: slot.y, w: 1, h: 1, sprite });
     }
   }
 
@@ -526,8 +547,7 @@ export class RoomScene extends Phaser.Scene {
 
       const key = `${this.mapId}:visit:${v.name}`;
       this.propNames.set(key, v.name);
-      const p = { ...v, look: 'person', key, w: 1, h: 1, sprite, visitor: true,
-        met: this.metProps.has(key) };
+      const p = { ...v, look: 'person', key, w: 1, h: 1, sprite, visitor: true };
       this.props.push(p);
 
       if (v.npc) {
@@ -544,6 +564,11 @@ export class RoomScene extends Phaser.Scene {
     }
   }
 
+  /** 오늘 이미 다가간 상대인가. **metProps 하나만 안다** — 프롭에 met를 또 달면 한쪽만 갱신된다 */
+  met(p) {
+    return !!p && this.metProps.has(p.key);
+  }
+
   propAt(x, y) {
     return this.props?.find((p) => p.x === x && p.y === y) ?? null;
   }
@@ -556,13 +581,12 @@ export class RoomScene extends Phaser.Scene {
     const already = this.metProps.has(p.key);
     this.observer.act(p.key, `${this.placeLabel()}의 ${p.name}`, this.clock.label, 'approach');
     this.metProps.add(p.key);
-    this.talkingProp = p;         // 자유 입력의 호감도가 누구에게 가는지
     // **여기서 상대가 정해진다.** 이후 대사 텍스트로 안 바꾼다.
+    // 호감도가 갈 곳도 이 안에 들어 있다 — 따로 두면 안 지워지는 변수가 하나 는다
     // kind는 어느 AI가 답할지도 정한다 — 거울은 mirror, 나머지는 npc-reply
     this.beginTalk(p, p.isMirror ? 'mirror' : 'prop');
     // 오늘 이 사람이 부탁할 게 있으면 여기서 듣는다. **듣기 전에는 완료되지 않는다**
     const errand = this.hearErrands(p.npc);
-    p.met = true;
 
     if (p.isMirror) { this.talkToMirror(p); return; }   // 마지막 장면은 다른 AI가 맡는다
 
@@ -708,7 +732,7 @@ export class RoomScene extends Phaser.Scene {
 
     // 여기가 게임의 끝이다. 다음 기상부터 모든 행동이 +0이 된다 (DESIGN.md §3 Act 3)
     this.collapseNext = true;
-    p.met = true;
+    this.metProps.add(p.key);
     this.refresh();
     this.persist();
   }
@@ -747,11 +771,11 @@ export class RoomScene extends Phaser.Scene {
   speak(text, typed) {
     if (!text) return;
     // 거울은 전용 AI가 맡는다. 여기서 npc-reply로 새면 마지막 장면이 통째로 어긋난다
-    if (this.talkingWith?.kind === 'mirror' && this.talkingProp) {
+    if (this.talkingWith?.kind === 'mirror' && this.talkingWith.prop) {
       this.mirrorLog = [...(this.mirrorLog ?? []), { speaker: '나', text }];
       this.dialogueLog.push({ at: this.clock.label, from: '거울', player: { choice: null, text, typed } });
       if (typed) this.observer.tell(discloses(text, this.typedBaseline ?? 0), this.clock.label, this.partnerName);
-      this.talkToMirror(this.talkingProp, text);
+      this.talkToMirror(this.talkingWith.prop, text);
       return;
     }
 
@@ -763,11 +787,14 @@ export class RoomScene extends Phaser.Scene {
     // 자기 말이 아니다 (listening.js와 같은 근거)
     if (typed) {
       this.observer.tell(discloses(text, this.typedBaseline ?? 0), this.clock.label, to);
-      this.raiseAffinity(this.talkingProp, 'spoke');
+      // **지금 열려 있는 대화의 상대에게만** 간다. 닫혀 있으면 아무에게도 안 간다 —
+      // 예전엔 마지막으로 다가갔던 프롭이 계속 남아서, 편의점에서 한 일이
+      // 몇 시간 전 고양이의 호감도로 갔다
+      this.raiseAffinity(talk.creditedTo(this.talkingWith, this.dialogue.open), 'spoke');
     }
     this.dialogueLog.push({ at: this.clock.label, player: { choice: null, text, typed }, to });
     // 이력은 넉넉히 남긴다 — 짧게 자르면 상대가 방금 한 말을 잊는다
-    this.chatLog = [...(this.chatLog ?? []), { speaker: '나', text }].slice(-CHAT_MEMORY);
+    this.remember('나', text);
 
     // 내가 한 말을 먼저 보여주고, 그 사이에 답을 만든다
     this.dialogue.play(
@@ -796,7 +823,7 @@ export class RoomScene extends Phaser.Scene {
       .then((out) => {
         if (out.error || !this.dialogue.open) throw new Error(out.error ?? 'closed');
         for (const l of out.data.lines ?? []) {
-          this.chatLog.push({ speaker: l.speaker, text: l.text });
+          this.remember(l.speaker, l.text);
           this.dialogueLog.push({ at: this.clock.label, speaker: l.speaker, text: l.text, from: '채팅' });
         }
         // 말한 것이 실제로 일어난다 — 잠시 뒤에 (game/effects.js)
@@ -833,7 +860,7 @@ export class RoomScene extends Phaser.Scene {
 
   /** @param {{npc?:string|null, name:string}} who @param {'prop'|'phone'|'mirror'} kind */
   beginTalk(who, kind = 'prop') {
-    this.talkingWith = { npc: who?.npc ?? null, name: who?.name ?? '상대', kind };
+    this.talkingWith = talk.open(who, kind);
     return this.talkingWith;
   }
 
@@ -844,6 +871,22 @@ export class RoomScene extends Phaser.Scene {
   /** 지금 상대의 이름. 대화 중이 아니면 null */
   get partnerName() {
     return this.talkingWith?.name ?? null;
+  }
+
+  /**
+   * 지금 상대와 지금까지 한 말. **상대별로 따로 쌓인다.**
+   *
+   * 예전엔 `chatLog` 하나에 전부 쌓았다. 그래서 고양이에게 말을 걸면
+   * 엄마와 하던 대화가 그대로 이력으로 넘어갔고, 모델은 그걸 이어받아
+   * 엄마로 답했다 — "고양이랑 대화하는데 엄마가 간섭된다"가 이 코드였다.
+   */
+  get chatLog() {
+    return talk.logOf(this.chats, this.talkingWith);
+  }
+
+  /** 한 줄 쌓는다. 지금 상대의 서랍에만 들어간다 */
+  remember(speaker, text) {
+    this.chats = talk.remember(this.chats, this.talkingWith, speaker, text);
   }
 
   // ── 말한 것이 실제로 일어난다 ───────────────────────────
@@ -940,12 +983,12 @@ export class RoomScene extends Phaser.Scene {
   /** 이름으로 호감도 키를 찾는다. 모르는 사람이면 null — 그래도 대화는 된다 */
   npcIdOf(name) {
     for (const [id, n] of this.npcNames ?? []) if (n === name) return id;
-    return NPC_NAME_TO_ID[name] ?? null;
+    return idOfName(name);
   }
 
   /**
    * npc-reply에 넘길 상대. **cast에 없는 사람도 제대로 넘어가야 한다** —
-   * 노숙자·길고양이·오늘의 프롭은 캐스팅 목록에 없고, 이름만 넘기면
+   * 노숙자·고양이·오늘의 프롭은 캐스팅 목록에 없고, 이름만 넘기면
    * 모델이 아는 사람(친구·엄마) 중 하나로 흘러간다.
    */
   partnerOf() {
@@ -955,7 +998,7 @@ export class RoomScene extends Phaser.Scene {
     if (known) return { ...known, situation: this.situationOf(w.name) };
     return {
       name: w.name,
-      relation: w.npc === 'cat' ? '길에서 마주친 동물' : '오늘 이 자리에서 마주친 사람',
+      relation: isAnimal(w.npc) ? '길에서 마주친 동물' : '오늘 이 자리에서 마주친 사람',
       tone: '이 사람으로만 답해라. 다른 등장인물의 이름이나 말투를 빌리지 마라',
       situation: this.situationOf(w.name),
     };
@@ -999,7 +1042,9 @@ export class RoomScene extends Phaser.Scene {
     if (!m) return;
     this.phone.open(m.id, this.clock.label, this.clock.minutes);
     this.observer.open(m.id, this.clock.label, m.delayMin ?? 0);
-    this.beginTalk({ npc: null, name: m.from }, 'phone');
+    // **누가 보낸 것인지 붙여서 연다.** 안 붙이면 답장을 써도 호감도가
+    // 그 사람에게 안 가고, 아는 사람인지도 못 알아본다
+    this.beginTalk({ npc: this.npcIdOf(m.from), name: m.from }, 'phone');
     this.lightPhone();          // 다 읽었으면 화면이 꺼진다
     this.playEvent(m.item);
   }
@@ -1073,18 +1118,27 @@ export class RoomScene extends Phaser.Scene {
     this.bag = t.bag;
     (this.gaveTo ??= new Set()).add(p.key);
 
-    this.observer.act(p.key, `${this.placeLabel()}의 ${p.name}`, this.clock.label, 'give');
+    // 부탁의 target은 **건넨 물건**이다 (errands.js KINDS.give). 사람으로 맞추면
+    // 영영 안 맞아서, 시켜서 한 것도 전부 `self`(스스로 했다)로 기록된다
+    const deed = { kind: 'give', target: itemId };
+    // **왜 줬는지가 붙어야 한다.** 안 붙이면 부탁받아서 준 것과 그냥 준 것이
+    // analyst 앞에서 같은 신호가 된다 (game/observer.js)
+    this.observer.act(p.key, `${this.placeLabel()}의 ${p.name}`, this.clock.label, 'give',
+      errands.whyOf(this.errands, deed));
     this.dialogueLog.push({
       at: this.clock.label, player: { choice: null, text: `${itemLabel(itemId)}를 건넸다` },
       for_prop: p.name, place: this.placeLabel(),
     });
     this.lastAction = `${p.name}에게 ${itemLabel(itemId)}를 줬다`;
-    this.raiseAffinity(p, 'favor');
+    this.raiseAffinity(p, 'favor');            // 받은 사람 쪽 문이 열린다
+    // **시킨 사람이 따로 있으면 그쪽도 닫힌다.** 이게 없으면 "담요 좀 갖다줘"를
+    // 실제로 해도 부탁은 영영 안 한 것으로 남는다
+    this.closeErrands(deed, p.npc);
     this.persist();
     this.refresh();
 
     // 준 다음에 무슨 일이 생기는지는 AI가 쓴다. 여기 대사를 박지 않는다
-    if (!p.met) this.approachProp(p);
+    if (!this.met(p)) this.approachProp(p);
   }
 
   /**
@@ -1174,11 +1228,14 @@ export class RoomScene extends Phaser.Scene {
    *
    * **대가는 호감도뿐이다.** 포인트를 주면 "엄마라서 했다"와 "포인트라서 했다"가 섞인다.
    */
-  closeErrands(action) {
+  closeErrands(action, credited = null) {
     const r = errands.complete(this.errands, action, this.clock.label);
     if (!r.closed.length) return;
     this.errands = r.errands;
     for (const e of r.closed) {
+      // 방금 이 행동으로 이미 마음이 오른 사람에게 또 얹지 않는다 —
+      // 노숙자에게 담요를 주면 노숙자 쪽은 건넨 것으로 이미 올랐다
+      if (e.npc === credited) continue;
       const p = (this.props ?? []).find((x) => x.npc === e.npc);
       if (p) this.raiseAffinity(p, 'favor');
       else this.affinity = raise(this.affinity, e.npc, 'favor').state;   // 그 자리에 없어도 전해진다
@@ -1533,8 +1590,8 @@ export class RoomScene extends Phaser.Scene {
         // **한 번 말했다고 잠기지 않는다.** 다시 말을 걸 수 있어야 계속 털어놓는다.
         // 두 번째부터는 '다시 말 걸기' — writer를 또 부르지 않고 곧장 대화로 간다
         action: { key: prop.key, verb: 'approach', tier: null, score: 0,
-          label: prop.met ? `${prop.name}에게 다시` : prop.name,
-          short: prop.met ? '다시 말 걸기' : '다가가기' },
+          label: this.met(prop) ? `${prop.name}에게 다시` : prop.name,
+          short: this.met(prop) ? '다시 말 걸기' : '다가가기' },
         done: false,
         blocked: null,
       };
@@ -1609,13 +1666,7 @@ export class RoomScene extends Phaser.Scene {
     this.observer.act(key, `${this.placeLabel()}의 ${nameOf(o)}`, this.clock.label, t.action.verb, why);
     this.done.add(key);
     this.closeErrands(deed);               // 들은 적 있는 부탁이었으면 닫힌다
-    const got = this.scoreFor(t.action.score);      // 붕괴 이후엔 0
-    this.todayScore += got;
-    this.total += got;
-    // 점수와 **같이** 포인트가 들어온다. 점수는 기록으로 남고 포인트는 쓰면 준다 (game/shop.js)
-    this.points += got * POINT_PER_SCORE;
-    this.todayLog.push({ label: t.action.label, tier: t.action.tier, score: got });
-    this.lastAction = `${t.action.label}  +${got}`;
+    const got = this.award(this.scoreFor(t.action.score), t.action);   // 붕괴 이후엔 0
 
     switch (t.action.verb) {
       case 'clean':
@@ -1635,7 +1686,7 @@ export class RoomScene extends Phaser.Scene {
     }
 
     this.saveMapState();
-    this.overlay.popScore(cx, cy, got);
+    this.popScoreAt(cx, cy, got);
     this.applyLight();
     if (this.debugG.visible) this.drawDebug();
     this.refresh();
@@ -1714,16 +1765,16 @@ export class RoomScene extends Phaser.Scene {
       if (this.walkable(f.x, f.y)) this.placeAt(f.x, f.y);
     }
 
+    // 도착한 것도 부탁일 수 있다 — "공원 좀 다녀와". **닫아주지 않으면
+    // 실제로 다녀와도 안 한 것으로 정산에 실린다** (errands.js KINDS.visit)
+    this.closeErrands({ kind: 'visit', target: to });
+
     // 점수는 도착한 공간에, 공간마다 하루 1회. 자기 방은 점수가 없다.
     const dest = MAPS[to];
     if (dest && !this.visited.has(to)) {
       this.visited.add(to);
-      const got = this.scoreFor(dest.score);
-      this.todayScore += got;
-      this.total += got;
-      this.todayLog.push({ label: `${dest.label} 가기`, tier: dest.tier, score: got });
-      this.lastAction = `${dest.label} 가기  +${got}`;
-      this.overlay.popScore(this.gx * TILE + TILE / 2, ROOM_TOP + (this.gy + 1) * TILE - 6, got);
+      const got = this.award(this.scoreFor(dest.score), { label: `${dest.label} 가기`, tier: dest.tier });
+      this.popScoreAt(this.gx * TILE + TILE / 2, ROOM_TOP + (this.gy + 1) * TILE - 6, got);
     } else {
       this.lastAction = dest ? dest.label : '내 방';
     }
