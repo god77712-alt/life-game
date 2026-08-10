@@ -61,14 +61,32 @@ export function raise(state, npc, kind) {
   return { state: { ...state, [npc]: to }, from, to, moved: to !== from };
 }
 
+/**
+ * 관계의 단계. **경계 숫자가 사는 곳은 여기 하나다** —
+ * 다른 파일이 "45 미만이면 아직 안 친하다"를 자기 숫자로 또 알면
+ * 밴드를 조정하는 날 한쪽만 움직인다 (CLAUDE.md 코딩 규칙).
+ */
+export const BANDS = [
+  { at: 90, label: '가족' },
+  { at: 70, label: '가깝다' },
+  { at: 45, label: '편하다' },
+  { at: 20, label: '아는 사이' },
+  { at: 0, label: '서먹하다' },
+];
+
 /** 호감도가 어느 단계인가 — 숫자만 보여주면 무슨 뜻인지 모른다 */
 export function bandOf(v) {
-  if (v >= 90) return '가족';
-  if (v >= 70) return '가깝다';
-  if (v >= 45) return '편하다';
-  if (v >= 20) return '아는 사이';
-  return '서먹하다';
+  return (BANDS.find((b) => v >= b.at) ?? BANDS.at(-1)).label;
 }
+
+/**
+ * 아직 **트기 전**인가. 서먹하거나 겨우 아는 사이.
+ *
+ * 이 구간에서만 할 수 있는 일이 있다 — 흘린 말이 그렇다(game/wants.js).
+ * 편해진 뒤에는 물건이 필요 없다. 그때부터는 말이 오간다(`confide`).
+ */
+export const EARLY = BANDS.find((b) => b.label === '편하다').at;
+export const isEarly = (v) => v < EARLY;
 
 /** 상태창 한 줄들. 만난 적 있는 사람만 나온다 */
 export function affinityLines(state, names = {}) {

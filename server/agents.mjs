@@ -10,6 +10,9 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { TYPES, WALL_POSITIONS, FLOOR_POSITIONS, SIZES } from '../src/room/schema.js';
 import { THEME_LIST as THEME_NAMES } from '../src/render/textures.js';
+// 편의점 재고를 스키마의 enum으로 그대로 쓴다. 목록을 여기 또 적으면
+// 물건을 하나 늘렸을 때 모델만 모르는 상태가 되고, 그러면 흘린 말이 조용히 버려진다
+import { ORDER as ITEM_IDS } from '../src/game/shop.js';
 import { loadPrompt } from './prompts.mjs';
 import * as cache from './cache.mjs';
 
@@ -371,11 +374,24 @@ const MIRROR_SCHEMA = obj({
   ending: { type: 'boolean' },                  // 마지막 턴인가
 });
 
+/**
+ * 말끝에 **흘린 것.** 부탁이 아니다 — 해달라고 하지 않았는데 플레이어가 기억하면
+ * 그게 이 게임에서 가장 강한 관계 신호가 된다 (game/wants.js).
+ *
+ * `item: 'none'`이 기본이다. 매번 흘리면 대화가 주문서가 된다.
+ * enum이 편의점 재고와 묶여 있으므로 못 파는 걸 원할 수는 없다.
+ */
+const WANT = obj({
+  item: str(['none', ...ITEM_IDS]),
+  hint: str(),        // 대사 중 어느 말이 그 신호였는지 한 줄. 자료로만 쓴다
+});
+
 // 집필 — 실제 대사와 선택지
 const SCRIPT_SCHEMA = obj({
   lines: arr(obj({ speaker: str(), text: str() })),
   choices: CHOICES,
   free_input: { type: 'boolean' },              // 결정적 장면이면 true
+  want: WANT,
 });
 
 // 이어가기 — 플레이어가 직접 쓴 말에 대한 답
@@ -402,6 +418,11 @@ const REPLY_SCHEMA = obj({
     item: str(),        // give — 어떤 물건
     note: str(),        // 무슨 약속이었는지 한 줄
   }),
+  /**
+   * **`effect.give`와 방향이 반대다.** 저쪽은 이 사람이 플레이어에게 주는 것이고,
+   * 이쪽은 이 사람에게 없는 것이다. 아무것도 요구하지 않는다 — 그냥 말끝에 남는다
+   */
+  want: WANT,
 });
 
 // ── 레지스트리 ──────────────────────────────────────────────

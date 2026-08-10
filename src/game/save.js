@@ -53,6 +53,9 @@ export function snapshot(scene) {
     placed: scene.placed ?? [],
     points: scene.points ?? 0,
     bag: scene.bag ?? {},
+    // 누가 무엇을 흘렸는가. **날짜를 넘어 남아야 한다** — 어제 들은 말을
+    // 오늘 사 가는 것이 이 장치의 전부라, 여기가 빠지면 하루 안에 못 들으면 끝이다
+    wants: scene.wants ?? {},
     affinity: scene.affinity ?? null,
     npcNames: Object.fromEntries(scene.npcNames ?? []),
   };

@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>힘을 내 히키코모리 — AI 활용 기술 문서</title>
+<style>
+  @page { size: A4; margin: 18mm 16mm; }
+  :root { --ink:#1a1a1a; --dim:#666; --line:#d6d2cc; --accent:#8a6a1f; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0 auto; color: var(--ink); background: #fff;
+    font: 10.5pt/1.75 "Malgun Gothic", "맑은 고딕", system-ui, sans-serif;
+    max-width: 178mm; padding: 12mm 0;
+  }
+  h1 { font-size: 19pt; margin: 0 0 2mm; letter-spacing: -.02em; }
+  .sub { color: var(--dim); font-size: 10pt; margin: 0 0 8mm; }
+  h2 {
+    font-size: 12.5pt; margin: 9mm 0 3mm; padding-bottom: 1.5mm;
+    border-bottom: 1.2pt solid var(--ink); page-break-after: avoid;
+  }
+  h3 { font-size: 10.5pt; margin: 5mm 0 2mm; color: var(--accent); page-break-after: avoid; }
+  p { margin: 0 0 3mm; }
+  ul, ol { margin: 0 0 3mm; padding-left: 5mm; }
+  li { margin-bottom: 1.2mm; }
+  table { width: 100%; border-collapse: collapse; margin: 0 0 4mm; font-size: 9pt; }
+  th, td { border: .6pt solid var(--line); padding: 1.6mm 2.2mm; text-align: left; vertical-align: top; }
+  th { background: #f4f2ee; font-weight: 600; }
+  code { font-family: Consolas, "D2Coding", monospace; font-size: 9.5pt; }
+  pre {
+    background: #f7f6f3; border: .6pt solid var(--line); padding: 3mm 4mm; margin: 0 0 4mm;
+    font-family: Consolas, "D2Coding", monospace; font-size: 8.6pt; line-height: 1.55;
+    white-space: pre-wrap; page-break-inside: avoid;
+  }
+  .lead {
+    border-left: 2.5pt solid var(--accent); padding: 2mm 0 2mm 4mm; margin: 0 0 6mm; line-height: 1.8;
+  }
+  blockquote {
+    margin: 0 0 4mm; padding: 2mm 0 2mm 4mm; border-left: 2pt solid var(--line);
+    color: #333; font-size: 10pt;
+  }
+  a { color: #14509b; text-decoration: none; word-break: break-all; }
+  .note { color: var(--dim); font-size: 9.5pt; }
+  .avoid { page-break-inside: avoid; }
+</style>
+</head>
+<body>
+
+<h1>AI 활용 기술 문서</h1>
+<p class="sub">힘을 내 히키코모리 · NHN NAN 2026 해커톤 사전 과제 · 개인 참가</p>
+
+<div class="lead">
+이 게임에서 AI는 <b>대사를 예쁘게 써주는 도구가 아니라 게임의 규칙 엔진</b>이다.
+고정 NPC도, 고정 대사도, 고정 이벤트도 없다.
+매일 밤 AI가 그날의 행동과 대화 원문을 읽고 <b>가설을 세우고 · 채점하고 · 내일의 무대를 편성</b>한다.
+게임이 언제 끝나는지도 AI의 결론이 정한다.
+</div>
+
+<h2>1. 전체 구조</h2>
+<pre>브라우저 (Phaser 3, 번들러 없음)
+   │  fetch('/api/agent/&lt;name&gt;')            ← API 키는 클라이언트에 없다
+   ▼
+Node.js 얇은 프록시  (server/index.mjs)      ← 정적 파일 + API를 한 서버가 서빙
+   │  server/agents.mjs   에이전트 10개 등록 · 공통 실행기 · JSON 스키마 강제
+   │  server/prompts.mjs  prompts/*.md 를 <b>파일에서 직접 읽는다</b> (코드에 복붙하지 않음)
+   │  server/hypothesis.mjs  confidence 이동 · status 판정 (<b>코드의 몫</b>)
+   │  server/cache.mjs   동일 입력 캐시
+   ▼
+Anthropic API — 모델 <code>claude-opus-5</code> (전 에이전트 공통), 구조화 출력(JSON Schema)</pre>
+
+<h3>설계 원칙 넷</h3>
+<ol>
+  <li><b>역할이 다른 AI를 나눈다.</b> 분석과 생성은 요구가 정반대다 — 분석은 스키마가 흔들리면 안 되고
+      일관성이 전부이며, 생성은 매번 달라야 한다. 합치면 JSON을 강제하는 순간 대사가 딱딱해지고,
+      대사에 집중하면 스키마가 흔들린다.</li>
+  <li><b>세우는 쪽과 채점하는 쪽을 나눈다.</b> <code>analyst</code>는 가설의 <i>문장과 근거</i>만 낸다.
+      confidence를 움직이는 것은 <code>referee</code>의 판정이고, 실제로 값을 옮기고 <code>confirmed</code>를
+      판정하는 것은 <b>코드</b>(<code>hypothesis.mjs</code>)다.
+      자기 숙제를 자기가 채점하면 반증이 불가능하다.</li>
+  <li><b>프롬프트로 지킬 수 없는 규칙은 코드로 막는다.</b> "하루에 한 명만 흘려라" 같은 빈도 제약을
+      프롬프트는 지키지 못한다. 조건은 전부 코드가 판정한다(<code>wants.js canDrop()</code>).</li>
+  <li><b>키는 서버 프로세스 밖으로 나가지 않는다.</b> 모든 호출은 프록시를 경유하며 클라이언트에 키가 없다.</li>
+</ol>
+
+<h2>2. 등록된 AI 에이전트 10개</h2>
+<p>전부 <code>server/agents.mjs</code>의 <code>AGENTS</code> 한 곳에 등록된다.
+<b>새 AI 추가 = 프롬프트 <code>.md</code> 하나 + 등록 한 줄</b>이며, 실행기·JSON 스키마 검증·폴백·토큰 집계는 공통이다.</p>
+<table>
+  <tr><th>#</th><th>에이전트</th><th>역할</th><th>호출 시점 / 빈도</th><th>effort</th><th>프롬프트</th></tr>
+  <tr><td>0</td><td><code>casting</code></td><td>설문에서 세계와 등장인물을 세운다 (가설은 만들지 않는다)</td><td>Act 0 / 게임당 1회</td><td>high</td><td>casting.md</td></tr>
+  <tr><td>1</td><td><code>room-vision</code></td><td>방 사진 → 오브젝트 JSON (비전)</td><td>Act 0 / 게임당 1회</td><td>medium</td><td>room-vision.md</td></tr>
+  <tr><td>2</td><td><code>referee</code></td><td>어제의 예측과 오늘의 결과를 대조해 가설을 지지/반박<br><span class="note">confidence 값 자체는 모른다</span></td><td>정산 / 하루 1회</td><td>high</td><td>referee.md</td></tr>
+  <tr><td>3</td><td><code>analyst</code></td><td>행동·대화에서 <b>회피 패턴</b>과 <b>숨은 욕망</b>을 읽는다</td><td>정산 / 하루 1회</td><td>high</td><td>analyst.md</td></tr>
+  <tr><td>4</td><td><code>director</code></td><td>내일 무엇을 언제 왜 던질지 편성 · 부탁 · 거울 인물 지정</td><td>정산 / 하루 1회</td><td>high</td><td>director.md</td></tr>
+  <tr><td>5</td><td><code>writer</code></td><td>편성 1건 → 실제 대사와 선택지</td><td>정산 / 하루 1~2회</td><td>low<sup>*</sup></td><td>writer.md</td></tr>
+  <tr><td>6</td><td><code>npc-reply</code></td><td>플레이어가 <b>직접 쓴 문장</b>에 NPC가 답한다</td><td>실시간</td><td>low<sup>*</sup></td><td>npc-reply.md</td></tr>
+  <tr><td>7</td><td><code>goal-map</code></td><td>플레이어가 자기 입으로 한 말에서 <b>마지막 장소와 거울 인물</b>을 짓는다</td><td>가설 confirmed / 게임당 1회</td><td>high</td><td>goal-map.md</td></tr>
+  <tr><td>8</td><td><code>mirror</code></td><td>골 맵 인물과의 마지막 대화</td><td>실시간 / 3~4턴</td><td>medium<sup>*</sup></td><td>mirror.md</td></tr>
+  <tr><td>9</td><td><code>reality</code></td><td>현실에서 실제로 한 일의 사진을 확인한다 (비전)</td><td>Act 4 / 게임당 1회</td><td>medium</td><td>reality.md</td></tr>
+</table>
+<p class="note"><sup>*</sup> <code>realtime: true</code> — 플레이어가 화면 앞에서 기다리는 호출.
+<code>claude-opus-5</code>는 thinking을 생략하면 기본이 켜져 있어 대사 네 줄에도 추론이 돌아 10~20초가 걸렸다.
+<b>effort를 낮추는 것이 체감 속도에 가장 큰 레버</b>였고, 대사 품질은 거의 떨어지지 않았다.</p>
+
+<h2>3. 하루가 도는 방식 (정산 파이프라인)</h2>
+<pre>플레이어가 침대에서 잔다
+   │
+   ├─ 관측 로그 + 대화 <b>원문</b> + 어제의 가설 테이블을 모은다
+   ▼
+① referee    어제 세운 예측 vs 오늘 실제로 일어난 일 → 지지/반박 판정
+   ▼
+   <b>코드</b>   판정에 따라 confidence를 상수만큼 이동 · verified_count 증가
+   ▼
+② analyst    갱신된 근거로 가설 문장을 다시 쓴다 (avoid · want 두 갈래)
+   ▼
+   <b>코드</b>   confirmed 3조건 판정 — confidence ≥ 0.7 <b>and</b> 검증 2회 <b>and</b> 3겹 신호(말·반응·행동)
+   ▼
+③ director   내일의 무대 · 사건 · 부탁 · (회피 확정 시) 거울 인물 지정
+   ▼
+④ writer     편성 1건씩을 실제 대사와 선택지로
+
+정산은 80~95초가 걸린다 → <b>백그라운드 잡으로 돌리고 게임은 기다리지 않는다.</b>
+(서버가 job id만 즉시 주고, 클라이언트가 폴링한다. 요청 하나로 붙들면 중간 프록시가 먼저 끊는다)</pre>
+
+<h3>관측에 <code>why</code>가 붙는다</h3>
+<p>같은 행동도 <b>이유가 다르면 다른 신호</b>다. 구분이 없으면 분석 AI가 매번 다르게 지어낸다.</p>
+<table>
+  <tr><th style="width:26mm"><code>self</code></th><td>스스로 했다</td><td>행동 신호로 셀 수 있는 건 이쪽뿐</td></tr>
+  <tr><th><code>errand</code></th><td>누가 부탁해서</td><td>관계 신호 — 무엇을 했나가 아니라 <b>누구 말을 들었나</b></td></tr>
+  <tr><th><code>shop</code></th><td>사거나 먹으려고</td><td><b>사회적 신호로 읽으면 안 된다</b></td></tr>
+  <tr><th><code>remembered</code></th><td>흘린 말을 기억해서</td><td>아무도 안 시켰다 — 순응으로 설명되지 않는 유일한 줄</td></tr>
+</table>
+
+<h2>4. 주요 프롬프트와 지시 사항</h2>
+<p><b>프롬프트 원본 10개는 저장소의 <code>prompts/*.md</code>에 그대로 있으며, 서버가 이 파일을 직접 읽는다.</b>
+코드에 복붙된 사본이 없어 문서와 실제 동작이 어긋날 수 없다. 아래는 핵심 지시 발췌다.</p>
+
+<h3 class="avoid">analyst — 가설을 세우되 채점하지 않는다</h3>
+<blockquote>
+묻는 것은 <b>"이 사람의 입이 어떻게 열리는가"</b>다 — 누구에게, 무엇을 매개로, 언제.<br><br>
+<b>이 AI는 점수를 매기지 않는다.</b> confidence는 <code>referee</code>의 판정에 따라 코드가 상수만큼 움직이고,
+verified_count도 코드가 센다. status·confirmed 판정 역시 코드의 몫이다.
+세우는 쪽과 채점하는 쪽을 나눠야 반증이 가능하다 — 자기 숙제를 자기가 채점하면 안 된다.
+<b>이 AI가 낼 것은 가설의 문장과 근거뿐이다.</b>
+</blockquote>
+<p>또한 전 프롬프트에 걸린 공통 제약: <b>심리학자처럼 읽되 진단명은 절대 붙이지 않는다.</b>
+관찰에서 멈추지 않고 <i>그 회피가 무엇을 막아주나 / 그 바람을 무엇으로 대신하고 있나</i>까지 가되,
+병명·장애명으로 요약하지 않는다.</p>
+
+<h3 class="avoid">director — 이벤트는 아직 모르는 것을 향해 던진다</h3>
+<blockquote>
+밀도를 채우는 장식이 아니라 <b>아직 모르는 것</b>(과거·상처·두려움·바람)을 향해 던진다.
+직접 묻지 않는다 — <code>"왜 그랬어?"</code>는 문을 닫는다. 곁에 두고 스치게 한다.
+<b>세 번 던져 안 걸리면 그 방향이 아닌 것이고, 그것도 답이다.</b>
+</blockquote>
+
+<h3 class="avoid">confide — 플레이어를 닮은 고민을 만들지 마라</h3>
+<blockquote>
+그건 골 맵의 거울이 하는 일이고 게임의 마지막 한 방이다. 매일 그러면 거울이 죽는다.<br>
+만들 것은 <b>같은 신경을 건드리는 남의 고민</b> — 보인 것 <i>옆</i>이지 그것 자체가 아니다.
+<pre style="margin:2mm 0 0">피한다 → ✗ "나도 사람이 무서워"   ✓ "형이랑 3년째 말을 안 해"
+미룬다 → ✗ "나도 다 미루고 있어"  ✓ "부모님이 아직 모르셔"</pre>
+</blockquote>
+
+<h3 class="avoid">mirror — 이 게임의 마지막 장면</h3>
+<blockquote>
+사람은 자기 문제를 자기한테는 못 풀어준다. 그런데 <b>같은 처지의 남에게는 풀어준다.</b>
+플레이어가 이 인물에게 뭐라고 해주는 순간, 그건 자기가 자기한테 한 말이 된다.
+<b>게임이 할 일은 그 말을 받아내는 것뿐이고, 그다음엔 사라지는 것이다.</b>
+</blockquote>
+<p>거울 인물에게는 <b>드러내지 않는다</b>는 제약이 걸려 있다 — "너도 그렇지?"라고 묻는 순간 끝이다.
+알아채는 것은 플레이어의 몫이며, 마지막에 <b>플레이어가 해준 말을 그대로 인용</b>한다.</p>
+
+<h3 class="avoid">공통 — 코드가 실행할 수 있는 것만 약속한다</h3>
+<blockquote>
+NPC가 한 약속("방으로 가져다줄게")은 <code>place / move / give</code> 세 가지 효과로만 받는다.
+<b>코드가 모르는 효과는 조용히 버린다</b> — 지어낸 약속을 못 지키면 그게 더 나쁘다.
+그리고 <b>곧바로 일어나지 않는다.</b> 말하자마자 생기면 마술이고, "이따"는 이따 일어나야 약속이 된다.
+</blockquote>
+
+<h3>구조화 출력 (JSON Schema)</h3>
+<p>모든 에이전트는 <code>output_config.format = json_schema</code>로 호출된다.
+스키마는 <code>server/agents.mjs</code>에 정의되며, 일부는 <b>클라이언트 코드의 enum을 그대로 import</b>해
+클라이언트 검증과 어긋날 수 없게 했다.</p>
+<pre>// server/agents.mjs
+import { TYPES, WALL_POSITIONS, FLOOR_POSITIONS, SIZES } from '../src/room/schema.js';
+// → 방 사진 인식 결과의 오브젝트 type/position/size enum이 렌더러와 같은 출처를 쓴다
+
+// NPC가 흘리는 물건(want)의 enum = 편의점 재고(shop.ORDER)
+// → 팔지 않는 물건을 원하는 일이 구조적으로 불가능하다</pre>
+
+<h2>5. AI 실패를 다루는 방식</h2>
+<ul>
+  <li><b>실패는 콘솔이 아니라 보는 자리에 적는다.</b> API 호출이 죽으면 화면 상단에
+      <code>⚠ AI 연결 실패 — 이벤트가 생성되지 않는다</code>가 뜬다.
+      이 표시가 없어서 배포본 키가 401인 채로 나흘이 지난 적이 있다 — 이벤트도 NPC도 0건인데
+      화면에 아무 표시가 없으니 <b>게임이 원래 그런 줄 알게 된다.</b></li>
+  <li><b>응답을 기다리는 데는 반드시 시한이 있다</b>(25초). 없으면 응답이 안 올 때 대화창이 영영 안 닫히고,
+      대화 중에는 이동도 막히므로 게임이 통째로 멈춘다(실제로 멈췄다).</li>
+  <li><b>읽던 글은 어떤 경우에도 화면에서 사라지지 않는다.</b> 생성이 실패해도 갑자기 닫지 않고
+      <code>[Space]</code>로 닫게 한다. 답장이 없는 것도 이 게임에서는 흔한 일이고, 그 자체가 자료다.</li>
+  <li>동일 입력에 대한 응답 캐시(<code>server/cache.mjs</code>)로 개발 중 반복 호출 비용을 줄였다.</li>
+</ul>
+
+<h2>6. 개발에 사용한 AI 도구</h2>
+<table>
+  <tr><th style="width:38mm">도구</th><th>용도</th></tr>
+  <tr><td><b>Claude Code</b> (Claude Opus 5)</td>
+      <td>설계 논의, 코드 작성·리팩터링, 프롬프트 작성, 테스트 작성, 브라우저 자동화 기반 동작 검증.
+          저장소의 <code>CLAUDE.md</code>가 프로젝트 상시 지침으로 사용되었고,
+          <code>PROGRESS.md</code>에 일자별 의사결정 기록이 남아 있다.</td></tr>
+  <tr><td><b>Anthropic API</b> (<code>claude-opus-5</code>)</td>
+      <td>게임 런타임의 AI 전부 — 위 10개 에이전트. 비전(방 인식·현실 인증), 추론(가설·편성), 생성(대사·골 맵).</td></tr>
+</table>
+<p class="note">게임 내 텍스트(대사·이벤트·골 맵)는 실행 시점에 Anthropic API가 생성하며,
+설계 문서와 코드 주석은 개발자가 Claude Code와 협업해 작성했다.
+플레이 영상은 실제 플레이 화면을 그대로 녹화한 것으로, 합성이나 편집으로 만든 장면이 없다.</p>
+
+<h2>7. 외부 에셋 · 오픈소스 출처</h2>
+
+<h3>그래픽 · 사운드 — 외부 에셋 없음</h3>
+<p><b>이 프로젝트는 외부 이미지·타일셋·사운드 에셋을 사용하지 않는다.</b>
+모든 그래픽(바닥·벽·가구·캐릭터·UI)은 실행 시점에 <code>src/render/textures.js</code>가
+Phaser Graphics로 <b>코드에서 직접 그린다.</b> 사운드는 사용하지 않는다.
+폰트는 사용자 시스템의 monospace / Malgun Gothic을 사용하며 폰트 파일을 배포하지 않는다.</p>
+
+<h3>오픈소스</h3>
+<table>
+  <tr><th style="width:44mm">이름</th><th style="width:24mm">라이선스</th><th>용도 / 출처</th></tr>
+  <tr><td>Phaser 3</td><td>MIT</td><td>2D 게임 프레임워크. CDN 로드<br>
+      <span class="note">https://cdn.jsdelivr.net/npm/phaser@3/dist/phaser.min.js</span></td></tr>
+  <tr><td>@anthropic-ai/sdk</td><td>MIT</td><td>서버에서 Anthropic API 호출<br>
+      <span class="note">https://github.com/anthropics/anthropic-sdk-typescript</span></td></tr>
+  <tr><td>Node.js 내장 모듈</td><td>MIT</td><td>정적 서버 · 테스트 러너(<code>node --test</code>). 별도 프레임워크 없음</td></tr>
+</table>
+<p class="note">번들러·트랜스파일러를 쓰지 않는다. 브라우저가 ES 모듈을 직접 읽으므로
+저장소의 소스가 곧 배포되는 코드다.</p>
+
+<h2>8. 개인정보 · 데이터 취급</h2>
+<ul>
+  <li><b>방 사진과 현실 인증 사진은 저장하지 않는다.</b> 브라우저에서 축소해 전송하고, 서버는 모델에 넘긴 뒤 즉시 버린다. 디스크에 쓰지 않는다.</li>
+  <li>API 키는 서버 환경변수로만 존재하며 클라이언트 번들과 저장소에 포함되지 않는다(<code>.env</code>는 커밋 제외).</li>
+  <li>진행 상황은 플레이어 브라우저의 localStorage에만 저장된다. 서버는 플레이어를 식별하지 않고 계정도 없다.</li>
+  <li>플레이어가 <b>직접 입력한 문장은 요약하지 않고 원문 그대로</b> 게임 세션 내에 보관해 AI 입력으로 쓴다.
+      세션이 끝나면(새 게임) 함께 사라진다.</li>
+</ul>
+
+</body>
+</html>

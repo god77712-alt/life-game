@@ -12,6 +12,7 @@ import * as talk from '../game/talk.js';
 import { initialAffinity, raise, affinityLines, affinityOf } from '../game/affinity.js';
 import { ITEMS, POINT_PER_SCORE, buy, take, has, bagList, wantedFrom, itemLabel } from '../game/shop.js';
 import * as errands from '../game/errands.js';
+import * as wants from '../game/wants.js';
 import * as effects from '../game/effects.js';
 import { Schedule } from '../game/schedule.js';
 import { initialVitals, tickVitals, afterSleep, vitalsLine } from '../game/vitals.js';
@@ -21,6 +22,7 @@ import { ambientLine, ambientOverrides } from '../game/ambient.js';
 import { discloses } from '../game/listening.js';
 import { settleLines, devLine } from '../game/table.js';
 import * as save from '../game/save.js';
+import * as demo from '../game/demo.js';
 import { Overlay } from '../ui/overlay.js';
 import { Dialogue } from '../ui/dialogue.js';
 import { Reality } from '../ui/reality.js';
@@ -28,6 +30,7 @@ import { ChatInput } from '../ui/chatinput.js';
 import { Ending } from '../ui/ending.js';
 import { Touch } from '../ui/touch.js';
 import { TILE, ROOM_TOP, buildBaseTextures, objectTexture, THEMES } from '../render/textures.js';
+import { Fx } from '../render/fx.js';
 
 // 인물 명단(NPC_IDS·이름↔id·동물 여부)은 **residents.js가 유일한 출처다.**
 // 여기 표를 한 벌 더 두면 사람을 늘리거나 나눌 때 반드시 한쪽을 놓친다.
@@ -69,6 +72,8 @@ export class RoomScene extends Phaser.Scene {
     }).setOrigin(0.5, 1).setDepth(9201).setVisible(false);
 
     this.overlay = new Overlay(this);
+    // 방향이 바뀌는 네 순간에만 켜진다 (render/fx.js). 일상 행동은 popScore가 맡는다
+    this.fx = new Fx(this);
     this.dialogue = new Dialogue(this);
 
     // Act 4. 게임이 점수를 다 0으로 만든 다음에야 뜬다 — 여기서만 점수가 붙는다
@@ -169,6 +174,7 @@ export class RoomScene extends Phaser.Scene {
     this.npcNames = new Map();
     this.points = 0;                // 쓸 수 있는 포인트. 누적 점수와 별개로 줄어든다
     this.bag = {};                  // 산 것들
+    this.wants = {};                // 누가 무엇을 흘렸는가 (game/wants.js)
     this.sleptLastNight = true;
     this.rebuild();
   }
@@ -189,7 +195,11 @@ export class RoomScene extends Phaser.Scene {
   registerGoal(goal) {
     if (!registerGoalMap(goal)) return false;
     this.goal = goal;
-    if (this.mapId === 'street') this.buildMap();   // 지금 골목에 서 있으면 문이 바로 생겨야 한다
+    if (this.mapId === 'street') {
+      this.buildMap({ x: this.gx, y: this.gy });    // 지금 골목에 서 있으면 문이 바로 생겨야 한다
+      this.syncGoalAura(true);                      // 없던 문이 눈앞에서 열린다
+      this.lastAction = '골목 아래에 없던 문이 열렸다';
+    }
     this.refresh();
     return true;
   }
@@ -227,6 +237,7 @@ export class RoomScene extends Phaser.Scene {
     this.award(score, { label: '현실 — 이불 개기 (사진 인증)', tier: 'R' });
     this.dialogueLog.push({ at: this.clock.label, from: '현실', saw: verdict?.saw ?? '', score });
     this.overlay.popScore(this.gx * TILE + TILE / 2, ROOM_TOP + (this.gy + 1) * TILE - 6, score);
+    this.fx.reality(this.gx * TILE + TILE / 2, ROOM_TOP + this.gy * TILE + TILE / 2);
     this.overlay.drawHud(this.clock, this.todayScore, this.total, this.aiError, this.points);
     this.refresh();
     this.persist();
@@ -305,6 +316,8 @@ export class RoomScene extends Phaser.Scene {
       this.pending = s.pending ?? [];
       this.placed = s.placed ?? [];
       this.bag = s.bag ?? {};
+      // 들은 말도 하루로 초기화되지 않는다. 어제 흘린 것을 오늘 사 가는 게 이 장치의 전부다
+      this.wants = s.wants ?? {};
       this.npcNames = new Map(Object.entries(s.npcNames ?? {}));
       this.rebuild();
       // 어제 쌓인 원문은 관측에 되돌려 넣는다 — 거울의 재료다
@@ -378,12 +391,16 @@ export class RoomScene extends Phaser.Scene {
       this.collapsed = true;
       this.collapseNext = false;
       this.collapsedOn = this.clock.day;
+      // 규칙은 이미 바뀌었다(전 행동 +0). 이건 그걸 놓치지 말라는 표시일 뿐이다
+      this.time.delayedCall(200, () => this.fx.collapse());
+      this.lastAction = '무엇을 해도 점수가 붙지 않는다';
     }
     // 붕괴 하루가 지나야 현실 전환이다 (DESIGN.md §3 Act 4).
     // 붕괴 당일에 바로 요구하면 "0점이니 딴 걸 하라"는 거래처럼 보인다 —
     // 하루를 통째로 0점으로 살아본 다음이라야 그게 거래가 아니게 된다.
     if (this.collapsed && !this.realityDone && this.clock.day > (this.collapsedOn ?? Infinity)) {
-      this.time.delayedCall(1200, () => this.reality.show('이불 개기'));
+      // 요구하는 것은 **읽어낸 바람과 이어져야 한다** — 시연 대본이 켜져 있으면 그쪽을 쓴다
+      this.time.delayedCall(1200, () => this.reality.show(this.realityClaim ?? '이불 개기'));
     }
     this.applySchedule();           // 정산이 이미 끝나 있으면 바로 예약
 
@@ -422,7 +439,29 @@ export class RoomScene extends Phaser.Scene {
     this.spawnPlayer(spawnAt);
 
     this.applyLight();
+    this.syncGoalAura();
     if (this.debugG.visible) this.drawDebug();
+  }
+
+  /**
+   * 골 맵으로 가는 문에 빛을 붙인다. **맵을 다시 세울 때마다 다시 붙여야 한다** —
+   * buildMap이 스프라이트를 통째로 버리므로, 한 번 켜고 마는 방식이면
+   * 골목을 나갔다 오는 순간 문이 다시 평범한 문이 된다.
+   *
+   * @param {boolean} burst 방금 생긴 문인가 (한 번 터뜨릴 것인가)
+   */
+  syncGoalAura(burst = false) {
+    // 문 오브젝트에서 중심을 잡는다 — 문은 두 칸일 수 있어서 타일 좌표로는 한쪽으로 쏠린다
+    const door = MAPS[GOAL_ID] && this.mapId === 'street'
+      ? this.built.objects.find((o) => o.type === 'door' && o.position === 'bottom-wall')
+      : null;
+    if (!door) { this.fx.markDoor(null); return; }
+    const spot = {
+      cx: door.x * TILE + (door.w * TILE) / 2,
+      bottom: ROOM_TOP + (door.y + door.h) * TILE,
+    };
+    if (burst) this.fx.doorOpen(spot);
+    else this.fx.markDoor(spot);
   }
 
   // ── 맵별 상태 보존 ──────────────────────────────────────
@@ -651,6 +690,7 @@ export class RoomScene extends Phaser.Scene {
       .then((r) => r.json())
       .then((out) => {
         if (out.error || !this.dialogue.open) throw new Error(out.error ?? 'closed');
+        this.noteWant(p.npc, out.data.want);       // 말끝에 흘린 것 — 화면에는 안 뜬다
         this.dialogue.continueWith({ ...out.data, keepOpen: true });
         this.dialogue.onDone = (choice) => this.recordPropTalk(p, out.data, choice);
       })
@@ -684,7 +724,7 @@ export class RoomScene extends Phaser.Scene {
       { pending: true, onGiveUp: () => this.afterMirror(p, { lines: [] }, null) }
     );
 
-    fetch('/api/agent/mirror', {
+    const ask = this.demo ? this.demoMirror() : fetch('/api/agent/mirror', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -693,8 +733,9 @@ export class RoomScene extends Phaser.Scene {
         history: this.mirrorLog ?? [],
         message: message ?? '(다가왔다)',
       }),
-    })
-      .then((r) => r.json())
+    }).then((r) => r.json());
+
+    ask
       .then((out) => {
         if (out.error || !this.dialogue.open) throw new Error(out.error ?? 'closed');
         this.dialogue.continueWith(out.data);
@@ -739,6 +780,75 @@ export class RoomScene extends Phaser.Scene {
     this.metProps.add(p.key);
     this.refresh();
     this.persist();
+  }
+
+  // ── 시연 모드 ───────────────────────────────────────────
+  //
+  // `this.demo`가 켜져 있는 동안에만 산다. 켜는 곳은 DEV 패널 하나뿐이고,
+  // 켜지 않으면 아래 두 메서드는 아무도 부르지 않는다 (game/demo.js).
+
+  /**
+   * 시연 대본을 켠다. 회피·바람이 이미 확정된 상태에서 시작한다.
+   *
+   * **날짜와 누적도 같이 옮긴다.** 가설이 확정됐다는 건 며칠을 산 판이라는 뜻인데
+   * 화면이 DAY 1 · 누적 0이면 그 자체가 앞뒤가 안 맞고, 숫자는 제일 먼저 눈에 띈다.
+   */
+  startDemo() {
+    this.demo = new demo.DemoScript();
+    this.table = demo.TABLE;
+    this.mirrorCast = demo.MIRROR_CAST;
+    this.realityClaim = demo.REALITY_CLAIM;
+
+    const st = demo.START;
+    this.clock.day = st.day;
+    this.clock.wake = st.wake;         // 하루 게이지가 이 값에서 나온다 — 같이 안 옮기면 눈금이 어긋난다
+    this.clock.minutes = st.at;
+    // **오늘 번 것은 지운다.** 녹화 앞머리에서 이불을 개고 나가본 그 점수가
+    // 누적에 얹혀 있어야 "엿새째 오늘도 하고 있다"로 읽힌다
+    this.total = st.total + this.todayScore;
+    this.points = st.points;
+    this.affinity = { ...this.affinity, ...st.affinity };
+
+    this.registerGoal(demo.GOAL);      // 아직 골목이 아니면 문만 붙고 이펙트는 도착할 때 뜬다
+    this.overlay.drawHud(this.clock, this.todayScore, this.total, this.aiError, this.points);
+    this.refresh();
+  }
+
+  /** 시연 ② — 밤으로 옮겨 정산창을 띄운다. 정산창은 자고 나서만 뜬다 */
+  demoSettle() {
+    this.clock.minutes = demo.START.sleepAt;
+    this.endDay('sleep');
+  }
+
+  /**
+   * 시연에서 하루를 넘긴다. **취침 시각을 밤으로 박고 넘긴다** —
+   * 기상은 취침+9시간이라(clock.js), 누른 시각 그대로 넘기면 다음 날이 03:01에 시작한다.
+   * 규칙상 맞는 동작이지만 영상에서는 그냥 이상해 보인다.
+   */
+  demoNextDay() {
+    this.sleepMinutes = demo.START.sleepAt;
+    this.nextDay();
+  }
+
+  /** 친구의 답장을 표에서 꺼낸다. 실제 호출과 같은 모양으로 감싼다 */
+  demoReply() {
+    const next = this.demo.nextFriend();
+    return this.wrapDemo(next ?? { lines: [{ speaker: '친구', text: '나중에 또 하자' }], ending: true });
+  }
+
+  demoMirror() {
+    const t = this.demo.nextMirror();
+    return this.wrapDemo(t);
+  }
+
+  /**
+   * 생성에 걸리던 만큼 뜸을 들인다. **즉답하면 오히려 가짜로 보인다** —
+   * 실제 판에서는 6초쯤 `…`가 서 있고, 영상에서도 그 호흡이 있어야 대화로 읽힌다.
+   */
+  wrapDemo(data) {
+    return new Promise((resolve) => {
+      this.time.delayedCall(900, () => resolve({ data }));
+    });
   }
 
   /** 대화 하나가 끝났다. 얼마나 들었는지, 자기 얘기를 했는지 담는다 (listening.js). */
@@ -813,17 +923,30 @@ export class RoomScene extends Phaser.Scene {
       },
     );
 
-    fetch('/api/agent/npc-reply', {
+    // 시연 대본이 켜져 있으면 답장을 그 표에서 꺼낸다 (game/demo.js).
+    // **오가는 길은 그대로다** — 답을 쓰는 주체만 바뀐다
+    const ask = this.demo ? this.demoReply(to) : fetch('/api/agent/npc-reply', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         npc: this.partnerOf(),
-        context: { day: this.clock.day, at: this.clock.label, place: this.placeLabel() },
+        context: {
+          day: this.clock.day, at: this.clock.label, place: this.placeLabel(),
+          // 사이가 얼마나 됐는지 — 말투도, 흘릴 때인지도 이 값에 달렸다
+          affinity: this.talkingWith?.npc ? affinityOf(this.affinity, this.talkingWith.npc) : null,
+          // 이미 흘린 것이 있으면 또 흘리지 않게. 없으면 null —
+          // 빈 값을 넣으면 모델이 "뭔가 흘려야 하나"로 읽는다
+          heard: wants.heardFrom(this.wants, this.talkingWith?.npc),
+          // **오늘 이 사람에게** 이미 건넸는가. 받아놓고 또 원하면
+          // 자기가 뭘 받았는지 모르는 사람이 된다
+          given: this.gaveTo?.has(this.talkingWith?.prop?.key) || null,
+        },
         history: this.chatLog,
         message: text,
       }),
-    })
-      .then((r) => r.json())
+    }).then((r) => r.json());
+
+    ask
       .then((out) => {
         if (out.error || !this.dialogue.open) throw new Error(out.error ?? 'closed');
         for (const l of out.data.lines ?? []) {
@@ -832,6 +955,9 @@ export class RoomScene extends Phaser.Scene {
         }
         // 말한 것이 실제로 일어난다 — 잠시 뒤에 (game/effects.js)
         this.promise(out.data.effect);
+        // 말끝에 흘린 것. **아무 표시도 안 한다** — 들었는지는 플레이어의 몫이고,
+        // 못 듣고 지나간 것도 이 게임이 재려는 자료다 (game/wants.js)
+        this.noteWant(this.talkingWith?.npc, out.data.want);
         // **이 사람도 대화를 끝낼 수 있다.** 플레이어만 끝낼 수 있으면 억지로 이어진다
         const ends = out.data.ending === true;
         this.dialogue.continueWith({ ...out.data, keepOpen: !ends, choices: ends ? [] : out.data.choices });
@@ -1113,6 +1239,25 @@ export class RoomScene extends Phaser.Scene {
   }
 
   /**
+   * NPC가 말끝에 흘린 것을 적어둔다.
+   *
+   * **화면에 아무것도 띄우지 않는다.** 여기서 "○○를 원함"이라고 알리면
+   * 이건 퀘스트 목록이 되고, 플레이어는 사람 말을 듣는 대신 목록을 읽는다.
+   * 이 게임이 재려는 건 들었는가이지 목록을 봤는가가 아니다 (game/listening.js).
+   *
+   * 걸러내는 일은 전부 wants.js가 한다 — 여기서 또 검사하면 규칙이 두 곳에 산다.
+   * **호감도를 넘기는 이유**는 이게 초반 장치이기 때문이다. 아직 안 친한 사람만
+   * 흘리고, 편해진 뒤에는 안 흘린다 (game/wants.js canDrop).
+   */
+  noteWant(npc, want) {
+    if (!npc || !want || want.item === 'none') return;
+    const before = this.wants;
+    this.wants = wants.noteWant(this.wants, npc, want, this.clock.day,
+      affinityOf(this.affinity, npc));
+    if (this.wants !== before) this.persist();
+  }
+
+  /**
    * 손에 든 것을 건넨다. **이게 부탁의 다른 얼굴이다** —
    * 말로 부탁받는 것(request)과 아무 말 없이 필요해 보이는 것(wants)의 차이.
    */
@@ -1122,19 +1267,39 @@ export class RoomScene extends Phaser.Scene {
     this.bag = t.bag;
     (this.gaveTo ??= new Set()).add(p.key);
 
+    // 아무도 해달라고 안 했는데 준 것인가 — **흘린 말을 기억한 것인가**.
+    // 지우기 전에 먼저 묻는다. 지운 뒤에 물으면 항상 아니라고 답한다
+    const heard = wants.heardFrom(this.wants, p.npc);
+    const remembered = wants.isRemembered(this.wants, p.npc, itemId);
+
     // 부탁의 target은 **건넨 물건**이다 (errands.js KINDS.give). 사람으로 맞추면
     // 영영 안 맞아서, 시켜서 한 것도 전부 `self`(스스로 했다)로 기록된다
     const deed = { kind: 'give', target: itemId };
     // **왜 줬는지가 붙어야 한다.** 안 붙이면 부탁받아서 준 것과 그냥 준 것이
-    // analyst 앞에서 같은 신호가 된다 (game/observer.js)
+    // analyst 앞에서 같은 신호가 된다 (game/observer.js).
+    //
+    // 부탁이 먼저다 — 시킨 사람이 있으면 그건 `errand`고, 시킨 사람이 없는데
+    // 흘린 말을 주워온 것이면 `remembered`다. 이 둘이 같은 줄로 가면
+    // "말을 들어줬다"와 "말을 들었다"가 구분되지 않는다
+    const why = errands.whyOf(this.errands, deed);
     this.observer.act(p.key, `${this.placeLabel()}의 ${p.name}`, this.clock.label, 'give',
-      errands.whyOf(this.errands, deed));
+      why.why === 'self' && remembered ? { why: 'remembered', for: p.npc } : why);
     this.dialogueLog.push({
       at: this.clock.label, player: { choice: null, text: `${itemLabel(itemId)}를 건넸다` },
       for_prop: p.name, place: this.placeLabel(),
+      // 며칠 전에 흘린 말이었는지까지 남긴다 — 기억의 길이가 곧 신호의 세기다
+      remembered: remembered ? { hint: heard?.hint ?? null, heard_on: heard?.day ?? null } : null,
     });
-    this.lastAction = `${p.name}에게 ${itemLabel(itemId)}를 줬다`;
+    this.lastAction = remembered
+      ? `${p.name}에게 ${itemLabel(itemId)}를 줬다 — 기억하고 있었다`
+      : `${p.name}에게 ${itemLabel(itemId)}를 줬다`;
+    // **준 순간 잊는다.** 안 지우면 매일 같은 걸 원하는 사람이 되고,
+    // 커피 하나로 호감도를 계속 긁을 수 있다 (game/wants.js)
+    this.wants = wants.forget(this.wants, p.npc, itemId);
     this.raiseAffinity(p, 'favor');            // 받은 사람 쪽 문이 열린다
+    // 호감도 팝업만으로는 **기억해서 준 것**이 안 보인다. 정적 wants(사료·담요)와
+    // 같은 연출이면 대화를 들은 보람이 화면에 하나도 안 남는다
+    if (remembered) this.overlay.popNotice(`기억했다 — ${itemLabel(itemId)}`, '#9fd8ff');
     // **시킨 사람이 따로 있으면 그쪽도 닫힌다.** 이게 없으면 "담요 좀 갖다줘"를
     // 실제로 해도 부탁은 영영 안 한 것으로 남는다
     this.closeErrands(deed, p.npc);
@@ -1467,6 +1632,7 @@ export class RoomScene extends Phaser.Scene {
 
   update(time, delta) {
     this.overlay.stepPops(delta);                 // 팝업은 정산창이 떠도 끝까지 뜬다
+    this.fx.step(delta);                          // 이펙트도 — 붕괴는 정산창 위에서 터진다
     if (this.settling) return;                    // 정산 중에는 시간도 조작도 멈춘다
     if (this.dialogue.open) return;               // 대화 중에도 시계를 세운다 — 읽는 속도가 자원이 되면 안 된다
 
@@ -1579,8 +1745,13 @@ export class RoomScene extends Phaser.Scene {
       // 손에 그 사람이 원하는 게 있으면 행동이 **주기**로 바뀐다.
       // 침대와 같은 규칙 — 바라보는 대상의 *상태*가 행동을 정한다 (CLAUDE.md).
       // 이미 만난 상대에게도 줄 수 있다. 말은 하루 한 번이지만 주는 건 별개다
-      const gift = prop.wants && !this.gaveTo?.has(prop.key)
-        ? wantedFrom(this.bag, prop.wants) : null;
+      //
+      // **늘 그런 것(사료·담요)과 오늘 들은 것을 여기서 합치지 않는다** —
+      // 합치는 자리는 wants.js 하나다. 여기서 배열을 펴면 다음에 주는 자리가
+      // 하나 더 생겼을 때 한쪽만 고쳐진다 (8/3에 여섯 개를 만든 결함)
+      const list = wants.wantsOf(prop, this.wants);
+      const gift = list.length && !this.gaveTo?.has(prop.key)
+        ? wantedFrom(this.bag, list) : null;
       if (gift) {
         return {
           prop, obj: prop, gift,
@@ -1760,6 +1931,8 @@ export class RoomScene extends Phaser.Scene {
     this.leavePlace();
     this.mapId = to;
     this.buildMap();
+    // 골 맵은 다른 공간과 다르게 들어간다 — 여기만 문이 아니라 통과다
+    if (to === GOAL_ID) this.fx.portal();
 
     // 돌아오는 문 앞에 세운다 — 들어온 방향이 몸에 남는다
     const back = to === 'room' ? this.built.doorTiles[0]?.position : returnWall(from, to);
@@ -1815,6 +1988,9 @@ export class RoomScene extends Phaser.Scene {
     // 상대를 여기서 못 박아야 이어지는 말이 엉뚱한 사람에게 안 간다
     const from = item.script.lines?.[0]?.speaker ?? null;
     if (from) this.beginTalk({ npc: this.npcIdOf(from), name: from }, 'phone');
+    // 편성된 대사에서도 흘릴 수 있다. **폰으로 들은 것도 들은 것이다** —
+    // 여기가 빠지면 다가가서 만난 사람의 말만 기억되고, 하루의 절반이 새어나간다
+    if (from) this.noteWant(this.npcIdOf(from), item.script.want);
 
     this.dialogue.play({ ...item.script, keepOpen: true }, (choice) => {
       this.recordListening(choice, from);
@@ -1929,6 +2105,9 @@ export class RoomScene extends Phaser.Scene {
       cast: this.cast,
       // 부탁 — **안 한 것이 빠지면 이 체계를 만든 이유가 없다**
       errands: errands.summary(this.errands),
+      // 아무도 해달라고 안 한 것. **여기 남아 있다는 건 아직 안 줬다는 뜻이다** —
+      // 들었는데 안 한 것이라, 부탁의 `done:false`와 같은 종류의 신호다
+      heard_wants: wants.summary(this.wants, Object.fromEntries(this.npcNames), this.clock.day),
       // 인물별 호감도 + 그 사람에게 한 말 원문 — 고민(confide)을 지을 재료
       bonds: this.bonds(),
       // 거울 인물 — **한 번 정해지면 계속 그 사람이다.** 안 돌려보내면
@@ -2004,7 +2183,9 @@ export class RoomScene extends Phaser.Scene {
 
     // 이력을 먼저 챙기고(오늘 재생된 이벤트) 정산을 쏜다
     if (this.schedule) this.history = [...this.history, ...this.schedule.toHistory(this.clock.day)].slice(-8);
-    this.fireSettle();
+    // 시연 대본이 켜져 있으면 정산을 안 쏜다 — 실제 정산은 80초가 걸리고,
+    // 돌아온 결과가 심어둔 가설 테이블을 덮어써서 화면이 대본과 어긋난다
+    if (!this.demo) this.fireSettle();
 
     this.settleShown = {
       day: this.clock.day,
@@ -2034,6 +2215,9 @@ export class RoomScene extends Phaser.Scene {
         collapseNext: this.collapseNext,
         collapsedOn: this.collapsedOn,
         day: this.clock.day,
+        // 거울 인물이 섰으면 정산에 적힌다 — settleLines가 이 값을 기다리고 있었는데
+        // 아무도 안 넘겨줘서 그 줄이 한 번도 뜬 적이 없다 (table.js s.mirrorCast)
+        mirrorCast: this.mirrorCast,
       }),
     });
   }
