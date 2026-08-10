@@ -41,6 +41,8 @@
   a { color: #14509b; text-decoration: none; word-break: break-all; }
   .note { color: var(--dim); font-size: 9.5pt; }
   .avoid { page-break-inside: avoid; }
+  /* 블록도가 페이지 경계에서 반으로 잘리면 읽을 수가 없다 */
+  svg, table, blockquote { page-break-inside: avoid; break-inside: avoid; }
 </style>
 </head>
 <body>
@@ -81,54 +83,355 @@ Anthropic API — 모델 <code>claude-opus-5</code> (전 에이전트 공통), �
   <li><b>키는 서버 프로세스 밖으로 나가지 않는다.</b> 모든 호출은 프록시를 경유하며 클라이언트에 키가 없다.</li>
 </ol>
 
-<h2>2. 등록된 AI 에이전트 10개</h2>
-<p>전부 <code>server/agents.mjs</code>의 <code>AGENTS</code> 한 곳에 등록된다.
-<b>새 AI 추가 = 프롬프트 <code>.md</code> 하나 + 등록 한 줄</b>이며, 실행기·JSON 스키마 검증·폴백·토큰 집계는 공통이다.</p>
+<h2>2. AI 구성 — 두 종류로 나뉜다</h2>
+<p>에이전트 10개는 전부 <code>server/agents.mjs</code> 한 곳에 등록되고 실행기·스키마 검증·폴백·토큰 집계를 공유한다.
+그러나 하는 일의 성격은 <b>둘로 확실히 갈린다.</b></p>
+
 <table>
-  <tr><th>#</th><th>에이전트</th><th>역할</th><th>호출 시점 / 빈도</th><th>effort</th><th>프롬프트</th></tr>
-  <tr><td>0</td><td><code>casting</code></td><td>설문에서 세계와 등장인물을 세운다 (가설은 만들지 않는다)</td><td>Act 0 / 게임당 1회</td><td>high</td><td>casting.md</td></tr>
-  <tr><td>1</td><td><code>room-vision</code></td><td>방 사진 → 오브젝트 JSON (비전)</td><td>Act 0 / 게임당 1회</td><td>medium</td><td>room-vision.md</td></tr>
-  <tr><td>2</td><td><code>referee</code></td><td>어제의 예측과 오늘의 결과를 대조해 가설을 지지/반박<br><span class="note">confidence 값 자체는 모른다</span></td><td>정산 / 하루 1회</td><td>high</td><td>referee.md</td></tr>
-  <tr><td>3</td><td><code>analyst</code></td><td>행동·대화에서 <b>회피 패턴</b>과 <b>숨은 욕망</b>을 읽는다</td><td>정산 / 하루 1회</td><td>high</td><td>analyst.md</td></tr>
-  <tr><td>4</td><td><code>director</code></td><td>내일 무엇을 언제 왜 던질지 편성 · 부탁 · 거울 인물 지정</td><td>정산 / 하루 1회</td><td>high</td><td>director.md</td></tr>
-  <tr><td>5</td><td><code>writer</code></td><td>편성 1건 → 실제 대사와 선택지</td><td>정산 / 하루 1~2회</td><td>low<sup>*</sup></td><td>writer.md</td></tr>
-  <tr><td>6</td><td><code>npc-reply</code></td><td>플레이어가 <b>직접 쓴 문장</b>에 NPC가 답한다</td><td>실시간</td><td>low<sup>*</sup></td><td>npc-reply.md</td></tr>
-  <tr><td>7</td><td><code>goal-map</code></td><td>플레이어가 자기 입으로 한 말에서 <b>마지막 장소와 거울 인물</b>을 짓는다</td><td>가설 confirmed / 게임당 1회</td><td>high</td><td>goal-map.md</td></tr>
-  <tr><td>8</td><td><code>mirror</code></td><td>골 맵 인물과의 마지막 대화</td><td>실시간 / 3~4턴</td><td>medium<sup>*</sup></td><td>mirror.md</td></tr>
-  <tr><td>9</td><td><code>reality</code></td><td>현실에서 실제로 한 일의 사진을 확인한다 (비전)</td><td>Act 4 / 게임당 1회</td><td>medium</td><td>reality.md</td></tr>
+  <tr><th style="width:26mm">구분</th><th>하는 일</th><th>에이전트</th></tr>
+  <tr>
+    <td><b>기능형</b><br><span class="note">주어진 것을 변환</span></td>
+    <td>입력을 정해진 형식으로 바꾼다. <b>판단하지 않는다.</b> 틀리면 그 호출만 실패하고 게임 진행에는 영향이 없다.</td>
+    <td><code>room-vision</code> <code>casting</code> <code>writer</code> <code>npc-reply</code> <code>mirror</code> <code>reality</code></td>
+  </tr>
+  <tr>
+    <td><b>판단형</b><br><span class="note">게임의 방향을 정함</span></td>
+    <td>플레이어가 어떤 사람인지 <b>가설을 세우고 · 검증하고 · 다음 무대를 설계</b>한다.
+        <b>게임이 언제 끝나는지를 이들의 결론이 정한다.</b></td>
+    <td><code>referee</code> <code>analyst</code> <code>director</code> <code>goal-map</code></td>
+  </tr>
 </table>
-<p class="note"><sup>*</sup> <code>realtime: true</code> — 플레이어가 화면 앞에서 기다리는 호출.
-<code>claude-opus-5</code>는 thinking을 생략하면 기본이 켜져 있어 대사 네 줄에도 추론이 돌아 10~20초가 걸렸다.
-<b>effort를 낮추는 것이 체감 속도에 가장 큰 레버</b>였고, 대사 품질은 거의 떨어지지 않았다.</p>
 
-<h2>3. 하루가 도는 방식 (정산 파이프라인)</h2>
-<pre>플레이어가 침대에서 잔다
-   │
-   ├─ 관측 로그 + 대화 <b>원문</b> + 어제의 가설 테이블을 모은다
-   ▼
-① referee    어제 세운 예측 vs 오늘 실제로 일어난 일 → 지지/반박 판정
-   ▼
-   <b>코드</b>   판정에 따라 confidence를 상수만큼 이동 · verified_count 증가
-   ▼
-② analyst    갱신된 근거로 가설 문장을 다시 쓴다 (avoid · want 두 갈래)
-   ▼
-   <b>코드</b>   confirmed 3조건 판정 — confidence ≥ 0.7 <b>and</b> 검증 2회 <b>and</b> 3겹 신호(말·반응·행동)
-   ▼
-③ director   내일의 무대 · 사건 · 부탁 · (회피 확정 시) 거울 인물 지정
-   ▼
-④ writer     편성 1건씩을 실제 대사와 선택지로
-
-정산은 80~95초가 걸린다 → <b>백그라운드 잡으로 돌리고 게임은 기다리지 않는다.</b>
-(서버가 job id만 즉시 주고, 클라이언트가 폴링한다. 요청 하나로 붙들면 중간 프록시가 먼저 끊는다)</pre>
-
-<h3>관측에 <code>why</code>가 붙는다</h3>
-<p>같은 행동도 <b>이유가 다르면 다른 신호</b>다. 구분이 없으면 분석 AI가 매번 다르게 지어낸다.</p>
+<h3>기능형 6개 — 무엇을 하는지만</h3>
 <table>
-  <tr><th style="width:26mm"><code>self</code></th><td>스스로 했다</td><td>행동 신호로 셀 수 있는 건 이쪽뿐</td></tr>
+  <tr><th style="width:28mm">에이전트</th><th>입력 → 출력</th><th style="width:30mm">시점 / effort</th></tr>
+  <tr><td><code>room-vision</code></td><td>방 사진 → 오브젝트 목록 JSON (종류·위치·크기). 이 JSON이 그대로 도트 맵이 된다</td><td>Act 0 · 1회 / medium</td></tr>
+  <tr><td><code>casting</code></td><td>시작 설문 9문항 → 이 사람 주변에 있을 법한 세계와 등장인물<br><span class="note">가설은 만들지 않는다 — 무대만 세운다</span></td><td>Act 0 · 1회 / high</td></tr>
+  <tr><td><code>writer</code></td><td>편성 1건(“누가·어디서·무엇을 건드린다”) → 실제 대사와 선택지</td><td>정산 · 1~2회 / low</td></tr>
+  <tr><td><code>npc-reply</code></td><td>플레이어가 직접 쓴 문장 → 그 NPC의 답장 (실시간)</td><td>대화 중 / low</td></tr>
+  <tr><td><code>mirror</code></td><td>거울 인물 설정 + 오간 말 → 마지막 장면의 대사 (실시간)</td><td>골 맵 / medium</td></tr>
+  <tr><td><code>reality</code></td><td>현실 인증 사진 + 요구한 일 → 실제로 했는지 확인</td><td>Act 4 · 1회 / medium</td></tr>
+</table>
+
+<h2>3. 핵심 AI 4개 — 하루가 판단되는 방식</h2>
+
+<p>플레이어가 침대에서 자면 하루가 끝나고, 그 순간 아래 루프가 한 바퀴 돈다.
+<b>AI와 코드가 번갈아 선다</b> — 판단은 AI가 하고, <b>점수를 옮기고 확정을 선언하는 것은 코드</b>다.</p>
+
+<h3>블록도 1 — 역할과 경계 · 누가 무엇을 넘겨주는가</h3>
+<p>왼쪽은 <b>AI가 판단하는 영역</b>, 오른쪽은 <b>코드가 결정하는 영역</b>이다.
+가운데 세로선이 <b>경계</b>이며, 선을 넘는 화살표에 적힌 것이 <b>주고받는 것의 전부</b>다.
+AI는 경계 오른쪽의 값을 <b>읽지도 쓰지도 못한다.</b></p>
+
+<svg viewBox="0 0 760 700" width="100%" style="max-width:174mm; display:block; margin:0 auto 4mm;"
+     font-family="Malgun Gothic, sans-serif" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#333"/>
+    </marker>
+    <marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#8a8a8a"/>
+    </marker>
+    <style>
+      .ai  { fill:#fdf8ec; stroke:#8a6a1f; stroke-width:1.6 }
+      .cod { fill:#eef1f6; stroke:#44566b; stroke-width:1.4 }
+      .io  { fill:#fff; stroke:#333; stroke-width:1.3 }
+      .end { fill:#f3ece0; stroke:#8a6a1f; stroke-width:1.8 }
+      .tb  { font-size:12.5px; font-weight:700; fill:#111 }
+      .ts  { font-size:10px; fill:#444 }
+      .tn  { font-size:9px; fill:#8a2f2f }
+      .tag { font-size:9.5px; font-weight:700; fill:#8a6a1f }
+      .cdt { font-size:9.5px; font-weight:700; fill:#44566b }
+      .lane{ font-size:11px; font-weight:700; letter-spacing:.5px }
+      .ln  { stroke:#333; stroke-width:1.4; fill:none; marker-end:url(#ah) }
+      .lp  { stroke:#8a8a8a; stroke-width:1.2; fill:none; stroke-dasharray:5 3; marker-end:url(#ag) }
+      .pass{ font-size:9px; fill:#111; font-weight:700; text-anchor:middle }
+    </style>
+  </defs>
+
+  <!-- 레인 -->
+  <rect x="6" y="8" width="294" height="684" fill="#fdfbf6" stroke="#e0d8c6"/>
+  <rect x="420" y="8" width="334" height="684" fill="#f5f7fa" stroke="#d5dce4"/>
+  <line x1="360" y1="8" x2="360" y2="692" stroke="#999" stroke-width="1.2" stroke-dasharray="6 4"/>
+  <text class="lane" x="16" y="26" fill="#8a6a1f">AI가 판단한다</text>
+  <text class="ts"   x="16" y="42">문장과 판정을 낸다</text>
+  <text class="lane" x="430" y="26" fill="#44566b">코드가 결정한다 · 결정론적</text>
+  <text class="ts"   x="430" y="42">숫자를 옮기고 · 확정을 선언하고 · 실행 가능성을 검사한다</text>
+  <text class="pass" x="360" y="26" fill="#666" font-size="9">경 계</text>
+
+  <!-- 입력 -->
+  <rect class="io" x="16" y="56" width="274" height="44" rx="3"/>
+  <text class="tb" x="28" y="75">하루의 기록</text>
+  <text class="ts" x="28" y="92">행동 로그(why 포함) · 대화 원문 · 어제의 예측</text>
+  <path class="ln" d="M153 100 L153 122"/>
+
+  <!-- ① referee -->
+  <rect class="ai" x="16" y="122" width="274" height="72" rx="3"/>
+  <text class="tag" x="28" y="141">① 검증</text>
+  <text class="tb" x="70" y="141">referee</text>
+  <text class="ts" x="28" y="159">어제의 예측 vs 오늘 일어난 일을 1:1 대조</text>
+  <text class="tn" x="28" y="178">✕ confidence 값을 모른다 — 얼마나 움직일지 못 정한다</text>
+
+  <path class="ln" d="M290 152 L432 152"/>
+  <text class="pass" x="361" y="145">가설별 판정</text>
+  <text class="pass" x="361" y="167" font-weight="400" fill="#666">근거 문장만</text>
+
+  <rect class="cod" x="432" y="122" width="310" height="72" rx="3"/>
+  <text class="cdt" x="444" y="141">confidence 이동 — hypothesis.mjs</text>
+  <text class="ts" x="444" y="160">supported <tspan font-weight="700">+0.10</tspan> · contradicted <tspan font-weight="700">−0.15</tspan> · no_data 0</text>
+  <text class="ts" x="444" y="178">검증 횟수는 <tspan font-weight="700">지지됐을 때만</tspan> +1</text>
+
+  <!-- 되돌림 -->
+  <path class="lp" d="M432 208 L292 208"/>
+  <text class="pass" x="361" y="203" font-weight="400" fill="#555">갱신된 가설 테이블</text>
+
+  <!-- ② analyst -->
+  <rect class="ai" x="16" y="228" width="274" height="90" rx="3"/>
+  <text class="tag" x="28" y="247">② 분석</text>
+  <text class="tb" x="70" y="247">analyst</text>
+  <text class="ts" x="28" y="265">회피와 바람을 <tspan font-weight="700">각각</tspan> 한 문장으로</text>
+  <text class="ts" x="28" y="283">누구에게 열리는가(who) · 근거 신호 3겹</text>
+  <text class="tn" x="28" y="303">✕ 점수를 안 매긴다   ✕ 진단명을 안 붙인다</text>
+
+  <path class="ln" d="M290 262 L432 262"/>
+  <text class="pass" x="361" y="255">가설 문장 · who · 신호</text>
+  <text class="pass" x="361" y="277" font-weight="400" fill="#666">근거만. 숫자는 없다</text>
+
+  <rect class="cod" x="432" y="228" width="310" height="90" rx="3"/>
+  <text class="cdt" x="444" y="247">확정 판정 — statusOf()</text>
+  <text class="ts" x="444" y="266">5조건 <tspan font-weight="700">AND</tspan> → forming / testing / <tspan font-weight="700">confirmed</tspan></text>
+  <text class="ts" x="444" y="284">conf≥0.7 · 검증 2 · 3겹 · who · 자기개방</text>
+  <text class="ts" x="444" y="303" fill="#8a2f2f">AI는 이 판정을 뒤집을 수 없다</text>
+
+  <path class="lp" d="M432 332 L292 332"/>
+  <text class="pass" x="361" y="327" font-weight="400" fill="#555">status · 어느 겹이 비었는지</text>
+
+  <!-- ③ director -->
+  <rect class="ai" x="16" y="352" width="274" height="102" rx="3"/>
+  <text class="tag" x="28" y="371">③ 기획 · 편성</text>
+  <text class="tb" x="106" y="371">director</text>
+  <text class="ts" x="28" y="389">비어 있는 겹을 채울 사건을 내일에 배치</text>
+  <text class="ts" x="28" y="407">사건마다 <tspan font-weight="700">예측</tspan>을 같이 적는다</text>
+  <text class="ts" x="28" y="425">회피 confirmed면 <tspan font-weight="700">거울 인물</tspan>을 세운다</text>
+  <text class="tn" x="28" y="444">✕ 직접 묻지 않는다 — "왜 그랬어?"는 문을 닫는다</text>
+
+  <path class="ln" d="M290 392 L432 392"/>
+  <text class="pass" x="361" y="385">무대 · 사건 · 부탁 · 예측</text>
+  <text class="pass" x="361" y="407" font-weight="400" fill="#666">예측 = 내일 ①의 채점 기준</text>
+
+  <rect class="cod" x="432" y="352" width="310" height="102" rx="3"/>
+  <text class="cdt" x="444" y="371">실행 가능성 검사 — errands.js · effects.js</text>
+  <text class="ts" x="444" y="390">확인할 수 없는 부탁은 버린다</text>
+  <text class="ts" x="444" y="408">모르는 효과는 버린다 (place / move / give만)</text>
+  <text class="ts" x="444" y="426">빈도 제약도 코드가 막는다 (프롬프트는 못 지킨다)</text>
+  <text class="ts" x="444" y="445" fill="#8a2f2f">지어낸 약속을 못 지키면 그게 더 나쁘다</text>
+
+  <!-- 하루 순환 -->
+  <path class="ln" d="M742 403 L752 403 L752 78 L292 78"/>
+  <text class="pass" x="520" y="70" fill="#111">내일 하루의 무대가 되고, 그 결과가 다시 ①의 입력이 된다</text>
+
+  <!-- 게이트 -->
+  <path class="ln" d="M587 454 L587 490"/>
+  <rect class="cod" x="432" y="490" width="310" height="50" rx="3"/>
+  <text class="cdt" x="444" y="510">두 갈래가 <tspan font-size="10.5">모두</tspan> confirmed인가?</text>
+  <text class="ts" x="444" y="529">아니면 → 위로 돌아가 하루를 더 산다</text>
+
+  <path class="ln" d="M432 515 L292 515"/>
+  <text class="pass" x="361" y="509">예 · 게임당 1회</text>
+
+  <!-- ④ goal-map -->
+  <rect class="ai" x="16" y="490" width="274" height="90" rx="3"/>
+  <text class="tag" x="28" y="509">④ 설계</text>
+  <text class="tb" x="70" y="509">goal-map</text>
+  <text class="ts" x="28" y="527">바람 → 그것을 <tspan font-weight="700">해볼 수 있는 장소</tspan></text>
+  <text class="ts" x="28" y="545">회피 → 같은 회피를 가진 <tspan font-weight="700">거울 인물</tspan></text>
+  <text class="tn" x="28" y="565">✕ 선택지로 고른 말은 재료로 안 쓴다 (직접 쓴 문장만)</text>
+
+  <path class="ln" d="M153 580 L153 610"/>
+  <rect class="end" x="16" y="610" width="274" height="52" rx="3"/>
+  <text class="tb" x="28" y="631">붕괴 → 현실 전환</text>
+  <text class="ts" x="28" y="650">거울과의 대화가 끝나면 게임 안 모든 행동 +0</text>
+</svg>
+
+
+<h3>블록도 2 — 목표로 어떻게 수렴하는가</h3>
+<p>가설은 <b>두 갈래가 따로 차오른다.</b> 각 갈래는 다섯 개의 문턱을 모두 넘어야 하고,
+넘는 속도는 <b>referee가 지지/반박을 몇 번 냈는가</b>로만 정해진다.
+게임의 길이는 설계값이 아니라 <b>이 수렴의 결과</b>다.</p>
+
+<svg viewBox="0 0 720 430" width="100%" style="max-width:174mm; display:block; margin:0 auto 4mm;"
+     font-family="Malgun Gothic, sans-serif" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#333"/>
+    </marker>
+    <style>
+      .g   { stroke:#333; stroke-width:1.4; fill:none; marker-end:url(#a2) }
+      .bar { fill:#e7e2d6 }
+      .fil { fill:#c9a545 }
+      .fi2 { fill:#8fa8c4 }
+      .box { fill:#fff; stroke:#333; stroke-width:1.3 }
+      .avd { fill:#fdf6e4; stroke:#8a6a1f; stroke-width:1.5 }
+      .wnt { fill:#eef3f8; stroke:#44667f; stroke-width:1.5 }
+      .fin { fill:#f2ece0; stroke:#8a6a1f; stroke-width:1.8 }
+      .tb2 { font-size:12.5px; font-weight:700; fill:#111 }
+      .ts2 { font-size:10.5px; fill:#444 }
+      .tt  { font-size:9.5px; fill:#666 }
+      .gate{ font-size:10px; font-weight:700; fill:#111 }
+    </style>
+  </defs>
+
+  <!-- 축 -->
+  <text class="tt" x="20" y="22">DAY 1 — 아무것도 모른다</text>
+  <text class="tt" x="700" y="22" text-anchor="end">확정 — 며칠이 걸릴지는 정해져 있지 않다</text>
+  <line x1="20" y1="30" x2="700" y2="30" stroke="#bbb" stroke-width="1"/>
+
+  <!-- 회피 트랙 -->
+  <rect class="avd" x="20" y="46" width="132" height="60" rx="3"/>
+  <text class="tb2" x="32" y="68">회피 (avoid)</text>
+  <text class="ts2" x="32" y="86">무엇으로부터</text>
+  <text class="ts2" x="32" y="101">자기를 지키는가</text>
+
+  <rect class="bar" x="168" y="58" width="380" height="16" rx="2"/>
+  <rect class="fil" x="168" y="58" width="330" height="16" rx="2"/>
+  <text class="tt" x="176" y="70" fill="#3a2c08">말 ✓   반응 ✓   행동 ✓   검증 2/2   conf 0.78</text>
+  <text class="ts2" x="168" y="95">자기 개방 <tspan font-weight="700">0회</tspan> — 회피는 <tspan font-weight="700">안 한 것</tspan>에서 읽힌다</text>
+  <text class="tt" x="168" y="112">(말을 안 하는 것이 회피인데 말을 요구하면 순환이 된다)</text>
+
+  <path class="g" d="M556 66 L590 66"/>
+  <rect class="avd" x="590" y="46" width="112" height="60" rx="3"/>
+  <text class="tb2" x="601" y="70">거울 인물</text>
+  <text class="ts2" x="601" y="90">같은 회피를 가진</text>
+  <text class="ts2" x="601" y="104">남으로 등장</text>
+
+  <!-- 바람 트랙 -->
+  <rect class="wnt" x="20" y="140" width="132" height="60" rx="3"/>
+  <text class="tb2" x="32" y="162">바람 (want)</text>
+  <text class="ts2" x="32" y="180">무엇을</text>
+  <text class="ts2" x="32" y="195">해보고 싶은가</text>
+
+  <rect class="bar" x="168" y="152" width="380" height="16" rx="2"/>
+  <rect class="fi2" x="168" y="152" width="290" height="16" rx="2"/>
+  <text class="tt" x="176" y="164" fill="#17283a">말 ✓   반응 ✓   행동 ✓   검증 2/2   conf 0.71</text>
+  <text class="ts2" x="168" y="189">자기 개방 <tspan font-weight="700">1회 이상</tspan> — 바람은 <tspan font-weight="700">말을 해봐야</tspan> 알 수 있다</text>
+  <text class="tt" x="168" y="206">그래서 <tspan font-weight="700">회피가 먼저 차고 바람이 나중에 찬다</tspan> — 거울이 등장할 시간이 생긴다</text>
+
+  <path class="g" d="M556 160 L590 160"/>
+  <rect class="wnt" x="590" y="140" width="112" height="60" rx="3"/>
+  <text class="tb2" x="601" y="164">골 맵</text>
+  <text class="ts2" x="601" y="184">그 바람을 실제로</text>
+  <text class="ts2" x="601" y="198">해보는 무대</text>
+
+  <!-- 합류 -->
+  <path class="g" d="M646 106 L646 128"/>
+  <path class="g" d="M646 200 L646 224"/>
+  <rect class="fin" x="404" y="224" width="298" height="54" rx="3"/>
+  <text class="tb2" x="416" y="246">두 갈래가 모두 찼다 → 골 맵이 열린다</text>
+  <text class="ts2" x="416" y="266">그 장소에 그 인물이 서 있다. 플레이어가 그를 응원한다</text>
+
+  <path class="g" d="M553 278 L553 302"/>
+  <rect class="fin" x="404" y="302" width="298" height="54" rx="3"/>
+  <text class="tb2" x="416" y="324">붕괴 — 게임 안 모든 행동 +0</text>
+  <text class="ts2" x="416" y="344">0점짜리 하루를 통째로 살아본다</text>
+
+  <path class="g" d="M553 356 L553 380"/>
+  <rect class="fin" x="404" y="380" width="298" height="42" rx="3" fill="#e8efe4"/>
+  <text class="tb2" x="416" y="402">현실에서 한 번 해온다 → +100 · 게임 종료</text>
+  <text class="ts2" x="416" y="418">요구하는 일은 「바람」에서 나온다</text>
+
+  <!-- 수렴 규칙 메모 -->
+  <rect class="box" x="20" y="224" width="360" height="198" rx="3"/>
+  <text class="tb2" x="32" y="246">수렴을 지배하는 규칙</text>
+  <text class="ts2" x="32" y="270">· 시작값 0.20 → 문턱 0.70. 지지만으로 <tspan font-weight="700">최소 5회</tspan></text>
+  <text class="ts2" x="32" y="290">· <tspan font-weight="700">반박(−0.15)이 지지(+0.10)보다 무겁다</tspan></text>
+  <text class="tt"  x="44" y="307">아니라는 증거가 더 비싸게 얻어진다 → 틀린 가설은 빨리 죽는다</text>
+  <text class="ts2" x="32" y="329">· 검증 횟수는 <tspan font-weight="700">지지됐을 때만</tspan> 오른다</text>
+  <text class="tt"  x="44" y="346">판정이 났다는 사실만으로는 안 오른다</text>
+  <text class="ts2" x="32" y="368">· 예측이 없던 일은 <tspan font-weight="700">채점 대상이 아니다</tspan></text>
+  <text class="tt"  x="44" y="385">우연히 일어난 일로 가설이 강화되지 않는다</text>
+  <text class="ts2" x="32" y="407">· 세 번 던져 안 걸리면 그 방향이 아니다 — <tspan font-weight="700">그것도 답이다</tspan></text>
+</svg>
+
+
+<h3 class="avoid">① referee — 검증</h3>
+<table>
+  <tr><th style="width:26mm">목표</th><td>어제 세운 가설이 <b>틀렸음을 드러낼 기회</b>를 만든다. 맞히는 것이 아니라 <b>반증 가능하게</b> 하는 것이 목적이다.</td></tr>
+  <tr><th>판단 방법</th><td>어제 <code>director</code>가 이벤트마다 붙여둔 <b>예측</b>("이 사람이 여기 놓인 것을 보면 말을 걸 것이다")과
+      오늘의 실제 관측을 1:1로 대조한다. 예측이 없던 일은 판정 대상이 아니다.</td></tr>
+  <tr><th>출력</th><td>가설별 <code>supported</code> / <code>contradicted</code> / <code>no_data</code> + 근거 문장</td></tr>
+  <tr><th>경계</th><td><b>confidence 값 자체를 모른다.</b> 판정만 낸다. 폭은 코드가 정한다
+      — 반박(−0.15)이 지지(+0.10)보다 무겁다. 아니라는 증거가 더 비싸게 얻어지기 때문이다.</td></tr>
+</table>
+
+<h3 class="avoid">② analyst — 분석</h3>
+<table>
+  <tr><th style="width:26mm">목표</th><td>이 사람이 <b>무엇으로부터 자기를 지키고 있는가(회피)</b>와
+      <b>무엇을 해보고 싶은가(바람)</b>를 각각 한 문장으로 세운다.<br>
+      취향을 알아내는 것이 아니다 — <b>“이 사람의 입이 어떻게 열리는가”</b>를 묻는다.</td></tr>
+  <tr><th>판단 방법</th><td>행동 로그 · 대화 원문 · 어제까지의 가설 테이블을 읽는다.
+      행동에는 <b><code>why</code>가 붙어 있어</b> 같은 행동도 이유가 다르면 다른 신호로 읽힌다(§3-1).
+      관찰에서 멈추지 않고 <i>그 회피가 무엇을 막아주나 / 그 바람을 무엇으로 대신하고 있나</i>까지 간다.</td></tr>
+  <tr><th>출력</th><td>가설의 <b>문장 · 지목한 상대(who) · 근거 신호</b>. 신호에는 <code>language / reaction / behavior</code> 세 겹의 종류가 붙는다.</td></tr>
+  <tr><th>경계</th><td><b>진단명을 붙이지 않는다.</b> 그리고 <b>점수를 매기지 않는다</b> —
+      자기가 세운 가설을 자기가 채점하면 반증이 불가능해진다.</td></tr>
+</table>
+
+<h3 class="avoid">③ director — 기획 · 이벤트 편성</h3>
+<table>
+  <tr><th style="width:26mm">목표</th><td>내일 하루를 <b>가설을 흔들 수 있는 하루</b>로 짠다.
+      밀도를 채우는 장식이 아니라 <b>아직 모르는 것</b>(과거·상처·두려움·바람)을 향해 던진다.</td></tr>
+  <tr><th>판단 방법</th><td>덜 찬 가설이 무엇인지(어느 겹이 비었는지)를 보고 그 겹을 채울 사건을 고른다.
+      <b>직접 묻지 않는다</b> — <code>"왜 그랬어?"</code>는 문을 닫는다. 곁에 두고 스치게 한다.
+      <b>세 번 던져 안 걸리면 그 방향이 아닌 것이고, 그것도 답이다.</b></td></tr>
+  <tr><th>출력</th><td>무대 배치 · 이벤트(대화 / 방문 / 3겹) · 부탁 · <b>각 이벤트의 예측</b>(내일 referee의 채점 기준) ·
+      회피 확정 시 <b>거울 인물</b> 지정</td></tr>
+  <tr><th>경계</th><td>코드가 실행할 수 있는 형태만 낸다. 확인할 수 없는 부탁, 모르는 효과는 <b>조용히 버려진다</b> —
+      지어낸 약속을 못 지키면 그게 더 나쁘다.</td></tr>
+</table>
+
+<h3 class="avoid">④ goal-map — 마지막 장소 설계</h3>
+<table>
+  <tr><th style="width:26mm">목표</th><td>두 갈래를 <b>각각 다른 것으로</b> 만든다.<br>
+      <b>바람</b> → 그것을 실제로 해볼 수 있는 <b>무대</b> ·
+      <b>회피</b> → 같은 회피를 가진 <b>거울 인물</b></td></tr>
+  <tr><th>판단 방법</th><td>재료는 <b>플레이어가 자기 입으로 직접 쓴 문장</b>이다.
+      선택지를 고른 것은 남이 써준 말이라 재료로 쓰지 않는다.</td></tr>
+  <tr><th>왜 거울인가</th><td>사람은 자기 문제를 자기한테는 못 풀어준다. 그런데 <b>같은 처지의 남에게는 풀어준다.</b>
+      플레이어가 그를 응원하는 순간 그 말은 자기가 자기한테 한 말이 되고,
+      마지막에 그 인물이 <b>플레이어의 말을 그대로 인용</b>한다.</td></tr>
+  <tr><th>경계</th><td>거울은 <b>자기가 거울인 줄 모른다.</b> "너도 그렇지?"라고 묻는 순간 끝이다 —
+      알아채는 것은 플레이어의 몫이다.</td></tr>
+</table>
+
+<h3>확정은 AI가 선언하지 않는다 — 코드가 5조건으로 판정한다</h3>
+<pre>statusOf(h)  →  confirmed 는 <b>다섯 개가 모두</b> 참일 때만  (server/hypothesis.mjs)
+
+  ① confidence ≥ 0.70          referee 판정이 코드에 의해 누적된 값
+  ② 검증 통과 2회 이상          <b>지지됐을 때만</b> 오른다. 판정이 났다는 사실만으로는 안 오른다
+  ③ 3겹 신호 전부              말(language) · 반응(reaction) · 행동(behavior)
+  ④ 상대를 지목함(who)          상대가 없는 가설은 "혼자 하는 일"이다. 이 게임의 답이 될 수 없다
+  ⑤ 그 상대에게 자기 얘기를 함   <b>회피만 예외(0회)</b> — 회피는 <i>안 한 것</i>에서 읽히므로
+                               자기 개방을 요구하면 "말을 안 하는 것이 회피다"가 영영 확정될 수 없다(순환)</pre>
+<p>④와 ⑤는 개발 중에 <b>추가된</b> 조건이다. 10일 시뮬레이션에서 확정된 가설이
+<i>‘고양이에게 밥 주기’</i>였다 — 혼자 하는 일이었고, 골 맵도 거기 맞춰 사람 없는 장소로 지어졌다.
+<b>문턱을 낮췄더니 사람이 사라진 것이다.</b> 이 게임이 알아내려는 것은 취향이 아니라
+<b>이 사람이 누군가에게 자기 얘기를 하는가</b>이므로, 상대가 없는 가설은 아무리 확실해도 답이 아니다.</p>
+
+<h3>3-1. 관측에 <code>why</code>가 붙는다 — 분석의 입력 품질</h3>
+<p>같은 행동도 <b>이유가 다르면 다른 신호</b>다. 구분이 없으면 <code>analyst</code>가 매번 다르게 지어낸다.</p>
+<table>
+  <tr><th style="width:26mm"><code>self</code></th><td>스스로 했다</td><td>행동 신호로 <b>셀 수 있는 건 이쪽뿐</b></td></tr>
   <tr><th><code>errand</code></th><td>누가 부탁해서</td><td>관계 신호 — 무엇을 했나가 아니라 <b>누구 말을 들었나</b></td></tr>
   <tr><th><code>shop</code></th><td>사거나 먹으려고</td><td><b>사회적 신호로 읽으면 안 된다</b></td></tr>
-  <tr><th><code>remembered</code></th><td>흘린 말을 기억해서</td><td>아무도 안 시켰다 — 순응으로 설명되지 않는 유일한 줄</td></tr>
+  <tr><th><code>remembered</code></th><td>흘린 말을 기억해서</td><td>아무도 안 시켰다 — <b>순응으로 설명되지 않는 유일한 줄</b></td></tr>
 </table>
+
+<h3>정산은 게임을 멈추지 않는다</h3>
+<pre>referee → 코드 → analyst → 코드 → director → writer  =  <b>80~95초</b>
+
+→ 백그라운드 잡으로 돌린다. 서버가 job id만 즉시 주고 클라이언트가 폴링한다.
+   (요청 하나로 붙들면 중간 프록시가 먼저 끊는다 — 실제로 끊겼다)
+→ 플레이어는 정산창에서 <b>[Space]</b>만 누르면 다음 날로 간다. 결과는 그날 안에 도착한다</pre>
 
 <h2>4. 주요 프롬프트와 지시 사항</h2>
 <p><b>프롬프트 원본 10개는 저장소의 <code>prompts/*.md</code>에 그대로 있으며, 서버가 이 파일을 직접 읽는다.</b>
